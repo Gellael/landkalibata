@@ -299,8 +299,8 @@
     "@context": "https://schema.org",
     "@type": "Organization",
     "name": "Kalibata Project",
-    "url": "https://kalibataproject.com",
-    "logo": "https://kalibataproject.com/logo.png",
+    "url": "https://kalibataproject.my.id",
+    "logo": "https://kalibataproject.my.id/logo.png",
     "foundingDate": "2026",
     "description": "Kalibata Project membuat produk digital dari ide, mulai dari game kartu sampai alat pembuat peta desa.",
     "sameAs": ["https://www.instagram.com/kalibata.project"]
