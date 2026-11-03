@@ -174,7 +174,7 @@
 </script>
 
 <svelte:head>
-  <title>Kalibata Project: where ideas become projects</title>
+  <title>Kalibata Project</title>
   <meta name="description" content="Kalibata Project membuat produk digital dari ide, mulai dari game kartu sampai alat pembuat peta desa." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
