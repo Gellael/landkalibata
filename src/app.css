@@ -28,3 +28,8 @@ svg {
   display: block;
   max-width: 100%;
 }
+
+::selection {
+  background: #fbf3ea;
+  color: #7e0f14;
+}
