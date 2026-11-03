@@ -269,7 +269,7 @@
       <h1><span style="--d:0">Where ideas</span><span style="--d:1">become</span><span style="--d:2">projects.</span></h1>
       <p class="hero-sub">Mengubah ide menjadi produk digital yang bisa langsung dipakai.</p>
       <div class="hero-btns">
-        <a class="btn glow" use:magnet href="#proyek">Lihat proyek ↓</a>
+        <a class="btn glow" use:magnet href="#proyek">Lihat proyek</a>
         <a class="btn ghost hg" href={ig} target="_blank" rel="noopener noreferrer">Hubungi kami</a>
       </div>
     </div>
