@@ -34,11 +34,12 @@
     { val: '2026', label: 'Tahun Berdiri', icon: 'cal' },
   ];
 
-  // GANTI nama, peran, dan inisial sesuai tim sebenarnya
+  // Isi nama dan foto nanti. photo: path gambar di folder public, contoh '/tim/nama.jpg'
+  // role dikosongkan dulu; kalau diisi, otomatis tampil di kartu
   const team = [
-    { name:'Ricardo Gellael', role:'', init:'N1', hue:'#ff6b35' },
-    { name:'Rayhan MA', role:'', init:'N2', hue:'#1fbf6b' },
-    { name:'Juan APP', role:'', init:'N3', hue:'#ffd36b' },
+    { name:'Ricardo Gellael', role:'', photo:'', hue:'#ff6b35' },
+    { name:'Rayhan MA', role:'', photo:'', hue:'#1fbf6b' },
+    { name:'Juan APP', role:'', photo:'', hue:'#ffd36b' },
   ];
 
   const steps = [
@@ -231,6 +232,7 @@
     {:else if n==='pen'}<path d="M4 20l1-4L16 5l3 3L8 19z"/><path d="M14 7l3 3"/>
     {:else if n==='coin'}<circle cx="12" cy="12" r="9"/><path d="M12 7v10M9.5 9.5c0-1 1.1-1.7 2.5-1.7s2.5.7 2.5 1.7-1 1.5-2.5 1.8-2.5.8-2.5 1.8 1.1 1.7 2.5 1.7 2.5-.7 2.5-1.7"/>
     {:else if n==='users'}<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6"/><circle cx="17.5" cy="9" r="2.6"/><path d="M17 14.2c2.8.2 4.5 2.1 4.5 4.8"/>
+    {:else if n==='user'}<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/>
     {:else if n==='send'}<path d="M21 3L10 14M21 3l-7 18-4-7-7-4z"/>
     {:else if n==='check'}<circle cx="12" cy="12" r="9"/><path d="M8 12.5l3 3 5-6"/>
     {:else}<rect x="3" y="9" width="18" height="12" rx="1.5"/><path d="M12 9v12M3 13h18M12 9C9 9 7 8 7 6s3-2 5 3c2-5 5-5 5-3s-2 3-5 3"/>{/if}
@@ -306,7 +308,7 @@
         <div class="mission-card" use:obs data-delay="140">
           <span class="mc-icon">{@render icon('pen')}</span>
           <h4>Desain Jelas</h4>
-          <p>UI yang bersih dan intuitif — tidak perlu baca manual untuk mulai menggunakan.</p>
+          <p>UI yang bersih dan intuitif tidak perlu baca manual untuk mulai menggunakan.</p>
         </div>
         <div class="mission-card" use:obs data-delay="280">
           <span class="mc-icon">{@render icon('coin')}</span>
@@ -455,10 +457,10 @@
         {#each team as m, i}
           <div class="tslot" use:obs data-delay={i*140}>
             <article class="tcard" use:tilt style="--h:{m.hue};--ti:{i}">
-              <div class="avatar"><span class="a-ring"></span><span class="a-init">{m.init}</span></div>
+              <div class="avatar"><span class="a-ring"></span><span class="a-init">{#if m.photo}<img src={m.photo} alt={m.name} loading="lazy"/>{:else}{@render icon('user')}{/if}</span></div>
               <span class="t-num">0{i+1}</span>
               <h3>{m.name}</h3>
-              <p class="t-role">{m.role}</p>
+              {#if m.role}<p class="t-role">{m.role}</p>{/if}
             </article>
           </div>
         {/each}
@@ -757,7 +759,8 @@
   .tcard>*{position:relative;z-index:1}
   .avatar{position:relative;width:104px;aspect-ratio:1;margin:0 auto 1rem;display:grid;place-items:center;animation:fb 4s ease-in-out infinite;animation-delay:calc(var(--ti)*-.9s)}
   .a-ring{position:absolute;inset:-7px;border-radius:50%;background:conic-gradient(var(--h),var(--cream),var(--h));animation:cspin 6s linear infinite;-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px))}
-  .a-init{width:100%;height:100%;border-radius:50%;display:grid;place-items:center;font-family:'Anton',sans-serif;font-size:2.2rem;background:radial-gradient(circle at 30% 25%,var(--h),#3a0508 90%);color:var(--cream);text-shadow:0 2px 6px rgba(0,0,0,.35)}
+  .a-init{width:100%;height:100%;border-radius:50%;display:grid;place-items:center;font-family:'Anton',sans-serif;font-size:2.2rem;background:radial-gradient(circle at 30% 25%,var(--h),#3a0508 90%);color:var(--cream);text-shadow:0 2px 6px rgba(0,0,0,.35);overflow:hidden;font-size:2.6rem}
+  .a-init img{width:100%;height:100%;object-fit:cover}
   .t-num{display:block;font-size:.6rem;font-weight:800;letter-spacing:.1em;opacity:.35}
   .tcard h3{margin:.2rem 0 0;font-size:1.7rem;line-height:1;text-transform:uppercase}
   .t-role{margin:.5rem 0 0;font-size:.78rem;font-weight:700;opacity:.65;text-transform:uppercase;letter-spacing:.05em}
