@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick as svelteTick } from 'svelte';
-  import { cubicOut } from 'svelte/easing';
+  import { cubicOut, quintOut } from 'svelte/easing';
 
   type Project = {
     id: string;
@@ -11,6 +11,7 @@
     cta: string;
     url: string;
     tilt: number;
+    accent: string;
   };
 
   // ====== EDIT BAGIAN INI ======
@@ -29,7 +30,8 @@
       ],
       cta: 'Mainkan sekarang',
       url: 'https://songin.my.id',
-      tilt: 6
+      tilt: 6,
+      accent: '#d4181f'
     },
     {
       id: 'petakilat',
@@ -43,7 +45,8 @@
       ],
       cta: 'Buat peta',
       url: 'https://petakilat.my.id',
-      tilt: 40
+      tilt: 40,
+      accent: '#1fbf6b'
     }
     // Tambah proyek baru: salin satu blok di atas, beri id baru, lalu tambahkan ilustrasinya di snippet "art".
   ];
@@ -54,6 +57,19 @@
   let selected: string | null = null;
   $: current = projects.find((p) => p.id === selected) ?? null;
 
+  // Hero slideshow state
+  let slideIndex = 0;
+  let slideProgress = 0;
+  const SLIDE_DURATION = 4000; // ms per slide
+  let slideInterval: ReturnType<typeof setInterval> | null = null;
+
+  // Scroll-reveal tracking
+  let revealEls: HTMLElement[] = [];
+  let scrollY_local = 0;
+
+  // Navbar scroll state
+  let navScrolled = false;
+
   let heroIn: HTMLDivElement;
   let heroScenes: HTMLDivElement[] = [];
   let bar: HTMLDivElement;
@@ -63,7 +79,36 @@
   let tileScenes: HTMLDivElement[] = [];
   let detailScene: HTMLDivElement | null = null;
 
+  // Floating particles
+  let particles: { x: number; y: number; size: number; speed: number; opacity: number; delay: number }[] = [];
+
   const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  function initParticles() {
+    particles = Array.from({ length: 20 }, () => ({
+      x: Math.random() * 100,
+      y: Math.random() * 100,
+      size: Math.random() * 4 + 2,
+      speed: Math.random() * 20 + 15,
+      opacity: Math.random() * 0.3 + 0.1,
+      delay: Math.random() * -20
+    }));
+  }
+
+  function startSlideshow() {
+    if (reduced()) return;
+    slideInterval = setInterval(() => {
+      slideIndex = (slideIndex + 1) % projects.length;
+      slideProgress = 0;
+    }, SLIDE_DURATION);
+  }
+
+  function goToSlide(i: number) {
+    slideIndex = i;
+    slideProgress = 0;
+    if (slideInterval) clearInterval(slideInterval);
+    startSlideshow();
+  }
 
   async function choose(id: string) {
     selected = selected === id ? null : id;
@@ -83,8 +128,61 @@
     };
   }
 
+  // Scroll reveal transition
+  function reveal(node: Element, { delay = 0, y = 60 } = {}) {
+    return {
+      duration: reduced() ? 0 : 800,
+      delay: reduced() ? 0 : delay,
+      easing: quintOut,
+      css: (t: number) =>
+        `opacity:${t};transform:translateY(${(1 - t) * y}px)`
+    };
+  }
+
+  // Intersection observer for scroll reveals
+  function observeReveal(node: HTMLElement) {
+    if (reduced()) {
+      node.style.opacity = '1';
+      node.style.transform = 'none';
+      return { destroy() {} };
+    }
+    node.style.opacity = '0';
+    node.style.transform = 'translateY(50px)';
+    node.style.transition = 'opacity 0.8s cubic-bezier(0.16, 1, 0.3, 1), transform 0.8s cubic-bezier(0.16, 1, 0.3, 1)';
+    const io = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((e) => {
+          if (e.isIntersecting) {
+            const d = parseFloat(node.dataset.delay || '0');
+            setTimeout(() => {
+              node.style.opacity = '1';
+              node.style.transform = 'translateY(0)';
+            }, d);
+            io.unobserve(node);
+          }
+        });
+      },
+      { threshold: 0.15, rootMargin: '0px 0px -60px 0px' }
+    );
+    io.observe(node);
+    return { destroy() { io.disconnect(); } };
+  }
+
   onMount(() => {
-    if (reduced()) return () => {};
+    initParticles();
+    startSlideshow();
+
+    // Track scroll for navbar
+    const onScroll = () => {
+      scrollY_local = window.scrollY;
+      navScrolled = scrollY_local > 60;
+    };
+    addEventListener('scroll', onScroll, { passive: true });
+
+    if (reduced()) return () => {
+      if (slideInterval) clearInterval(slideInterval);
+      removeEventListener('scroll', onScroll);
+    };
 
     const clamp = (v: number, a = 0, b = 1) => Math.min(b, Math.max(a, v));
     const wideQuery = matchMedia('(min-width: 900px) and (min-height: 600px)');
@@ -109,13 +207,19 @@
     const hov = projects.map(() => ({ x: 0, y: 0 }));
     const enterS = projects.map(() => 1);
 
+    // Slideshow progress tracker
+    let slideStart = performance.now();
+
     let last = performance.now();
     let raf = 0;
     const frame = (now: number) => {
       const dt = Math.min(now - last, 64);
       last = now;
-      const k = 1 - Math.exp(-dt / 110); // makin besar pembagi, makin lembut
+      const k = 1 - Math.exp(-dt / 110);
       const sec = now / 1000;
+
+      // Slide progress (0–1)
+      slideProgress = Math.min((now - slideStart) / SLIDE_DURATION, 1);
 
       bar.style.transform = `scaleX(${clamp(scrollY / Math.max(1, doc.scrollHeight - vh))})`;
 
@@ -132,26 +236,29 @@
       const hy = hasHover ? mouse.sx * 20 : Math.sin(sec / 1.8) * 10;
       const hx = hasHover ? mouse.sy * 10 : 0;
       const bob = Math.sin(sec * 1.1) * 8;
-      heroScenes[0].style.transform = `translate3d(0, ${bob}px, 0) rotateX(${6 - hx}deg) rotateY(${-14 + hy}deg)`;
-      heroScenes[1].style.transform = `translate3d(0, ${-bob}px, 0) rotateX(${40 - hx}deg) rotateY(${12 + hy}deg)`;
+      if (heroScenes[0]) heroScenes[0].style.transform = `translate3d(0, ${bob}px, 0) rotateX(${6 - hx}deg) rotateY(${-14 + hy}deg)`;
+      if (heroScenes[1]) heroScenes[1].style.transform = `translate3d(0, ${-bob}px, 0) rotateX(${40 - hx}deg) rotateY(${12 + hy}deg)`;
 
       // Kartu pilihan: masuk dengan miring 3D, lalu mengikuti kursor
-      const wrapTop = tilesEl.getBoundingClientRect().top;
-      projects.forEach((p, i) => {
-        const r = tiles[i].getBoundingClientRect();
-        const inside = hasHover && mouse.cx >= r.left && mouse.cx <= r.right && mouse.cy >= r.top && mouse.cy <= r.bottom;
-        const nx = inside ? ((mouse.cx - r.left) / r.width) * 2 - 1 : 0;
-        const ny = inside ? ((mouse.cy - r.top) / r.height) * 2 - 1 : 0;
-        hov[i].x += (nx - hov[i].x) * k;
-        hov[i].y += (ny - hov[i].y) * k;
+      if (tilesEl) {
+        const wrapTop = tilesEl.getBoundingClientRect().top;
+        projects.forEach((p, i) => {
+          if (!tiles[i]) return;
+          const r = tiles[i].getBoundingClientRect();
+          const inside = hasHover && mouse.cx >= r.left && mouse.cx <= r.right && mouse.cy >= r.top && mouse.cy <= r.bottom;
+          const nx = inside ? ((mouse.cx - r.left) / r.width) * 2 - 1 : 0;
+          const ny = inside ? ((mouse.cy - r.top) / r.height) * 2 - 1 : 0;
+          hov[i].x += (nx - hov[i].x) * k;
+          hov[i].y += (ny - hov[i].y) * k;
 
-        const enterT = clamp((wrapTop - vh * (0.6 - i * 0.05)) / (vh * 0.4));
-        enterS[i] += (enterT - enterS[i]) * k;
-        const e = enterS[i];
+          const enterT = clamp((wrapTop - vh * (0.6 - i * 0.05)) / (vh * 0.4));
+          enterS[i] += (enterT - enterS[i]) * k;
+          const e = enterS[i];
 
-        tiles[i].style.transform = `perspective(1200px) translateZ(${-e * 220}px) rotateX(${e * 32 - hov[i].y * 8}deg) rotateY(${hov[i].x * 10}deg)`;
-        tileScenes[i].style.transform = `rotateX(${p.tilt - hov[i].y * 14}deg) rotateY(${hov[i].x * 24}deg)`;
-      });
+          tiles[i].style.transform = `perspective(1200px) translateZ(${-e * 220}px) rotateX(${e * 32 - hov[i].y * 8}deg) rotateY(${hov[i].x * 10}deg)`;
+          if (tileScenes[i]) tileScenes[i].style.transform = `rotateX(${p.tilt - hov[i].y * 14}deg) rotateY(${hov[i].x * 24}deg)`;
+        });
+      }
 
       // Ilustrasi di panel detail
       if (detailScene && current) {
@@ -165,20 +272,39 @@
     };
     raf = requestAnimationFrame(frame);
 
+    // Reset slideStart when slide changes
+    const origGoToSlide = goToSlide;
+    const slideObserver = setInterval(() => {
+      slideStart = performance.now() - (slideProgress * SLIDE_DURATION);
+    }, 100);
+
     return () => {
       cancelAnimationFrame(raf);
       removeEventListener('resize', onResize);
       removeEventListener('pointermove', onPointer);
+      removeEventListener('scroll', onScroll);
+      if (slideInterval) clearInterval(slideInterval);
+      clearInterval(slideObserver);
     };
   });
 </script>
 
 <svelte:head>
-  <title>Kalibata Project</title>
-  <meta name="description" content="Kalibata Project membuat produk digital dari ide, mulai dari game kartu sampai alat pembuat peta desa." />
+  <title>Kalibata Project — Where Ideas Become Projects</title>
+  <meta name="description" content="Kalibata Project membuat produk digital dari ide, mulai dari game kartu sampai alat pembuat peta desa. Since 2026." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
-  <link href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo:wght@400;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Anton&family=Archivo:wght@400;600;700;800&display=swap" rel="stylesheet" />
+  {@html `<script type="application/ld+json">${JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "name": "Kalibata Project",
+    "url": "https://kalibataproject.com",
+    "logo": "https://kalibataproject.com/logo.png",
+    "foundingDate": "2026",
+    "description": "Kalibata Project membuat produk digital dari ide, mulai dari game kartu sampai alat pembuat peta desa.",
+    "sameAs": ["https://www.instagram.com/kalibata.project"]
+  })}</script>`}
 </svelte:head>
 
 <!-- Ilustrasi berlapis (tiap lapis punya kedalaman --z) -->
@@ -227,35 +353,101 @@
   {/if}
 {/snippet}
 
+<!-- Floating particles background -->
+<div class="particles" aria-hidden="true">
+  {#each particles as p}
+    <div
+      class="particle"
+      style="left:{p.x}%;top:{p.y}%;width:{p.size}px;height:{p.size}px;opacity:{p.opacity};--speed:{p.speed}s;--delay:{p.delay}s"
+    ></div>
+  {/each}
+</div>
+
 <div class="progress" bind:this={bar} aria-hidden="true"></div>
 
-<header class="nav">
-  <a class="brand" href="#top">Kalibata<br />Project</a>
+<header class="nav" class:scrolled={navScrolled}>
+  <a class="brand" href="#top">
+    <img src="/logo.png" alt="Kalibata Project" class="brand-logo" />
+    <span class="brand-text">Kalibata<br />Project</span>
+  </a>
   <nav aria-label="Navigasi utama">
     <a class="link" href="#proyek">Proyek</a>
-    <a class="btn small" href={instagram} target="_blank" rel="noopener noreferrer">Instagram</a>
+    <a class="btn small nav-btn" href={instagram} target="_blank" rel="noopener noreferrer">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z"/></svg>
+      Instagram
+    </a>
   </nav>
 </header>
 
 <main id="top">
   <section class="hero">
+    <!-- Animated gradient orbs -->
+    <div class="hero-orbs" aria-hidden="true">
+      <div class="orb orb-1"></div>
+      <div class="orb orb-2"></div>
+      <div class="orb orb-3"></div>
+    </div>
+
     <div class="hero-in" bind:this={heroIn}>
+      <!-- Slideshow art area -->
       <div class="hero-art" aria-hidden="true">
-        <div class="stage hs a"><div class="scene" bind:this={heroScenes[0]} style="--base:6deg">{@render art('songin')}</div></div>
-        <div class="stage hs b"><div class="scene" bind:this={heroScenes[1]} style="--base:40deg">{@render art('petakilat')}</div></div>
+        {#each projects as p, i}
+          <div class="slide-card" class:active={slideIndex === i} class:prev={slideIndex !== i}>
+            <div class="stage hs single">
+              <div class="scene" bind:this={heroScenes[i]} style="--base:{p.tilt}deg">
+                {@render art(p.id)}
+              </div>
+            </div>
+          </div>
+        {/each}
+        <!-- Slide indicators -->
+        <div class="slide-indicators">
+          {#each projects as p, i}
+            <button
+              class="indicator"
+              class:active={slideIndex === i}
+              on:click={() => goToSlide(i)}
+              aria-label="Lihat {p.name}"
+            >
+              <span class="indicator-fill" style={slideIndex === i ? `animation: fillBar ${SLIDE_DURATION}ms linear forwards` : ''}></span>
+              <span class="indicator-label">{p.name}</span>
+            </button>
+          {/each}
+        </div>
       </div>
-      <h1>
-        <span style="--d:0">Where ideas</span>
-        <span style="--d:1">become</span>
-        <span style="--d:2">projects.</span>
-      </h1>
-      <div class="hero-foot">
-        <p>
-          Kami mengubah ide menjadi produk digital yang bisa langsung dipakai: dari game kartu sampai alat pembuat
-          peta desa.
+
+      <div class="hero-text">
+        <p class="hero-tag" use:observeReveal data-delay="0">
+          <span class="tag-dot"></span>
+          Since 2026
         </p>
-        <a class="btn" href="#proyek">Pilih proyek</a>
+        <h1>
+          <span style="--d:0">Where ideas</span>
+          <span style="--d:1">become</span>
+          <span style="--d:2">projects.</span>
+        </h1>
+        <div class="hero-foot">
+          <p>
+            Kami mengubah ide menjadi produk digital yang bisa langsung dipakai — dari game kartu sampai alat pembuat
+            peta desa.
+          </p>
+          <div class="hero-actions">
+            <a class="btn glow" href="#proyek">
+              <span>Pilih proyek</span>
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M10 4v12M10 16l5-5M10 16l-5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </a>
+            <a class="btn ghost hero-ghost" href={instagram} target="_blank" rel="noopener noreferrer">Hubungi kami</a>
+          </div>
+        </div>
       </div>
+    </div>
+
+    <!-- Scroll hint -->
+    <div class="scroll-hint" aria-hidden="true">
+      <div class="scroll-mouse">
+        <div class="scroll-wheel"></div>
+      </div>
+      <span>Scroll</span>
     </div>
   </section>
 
@@ -271,14 +463,16 @@
 
   <section id="proyek" class="pick" aria-label="Proyek">
     <div class="wrap">
-      <div class="pick-head">
+      <div class="pick-head" use:observeReveal>
+        <p class="section-label">Proyek kami</p>
         <h2>Pilih satu.</h2>
-        <p>Klik salah satu proyek untuk melihat isinya.</p>
+        <p class="pick-sub">Klik salah satu proyek untuk melihat isinya.</p>
       </div>
 
       <div class="tiles" bind:this={tilesEl}>
         {#each projects as p, i (p.id)}
           <div class="tile {p.id}" class:active={selected === p.id} bind:this={tiles[i]}>
+            <div class="tile-shimmer"></div>
             <div class="tile-art" aria-hidden="true">
               <div class="stage">
                 <div class="scene" bind:this={tileScenes[i]} style="--base:{p.tilt}deg">
@@ -287,9 +481,10 @@
               </div>
             </div>
             <button class="pick-btn" aria-expanded={selected === p.id} aria-controls="detail" on:click={() => choose(p.id)}>
+              <span class="tile-number">0{i + 1}</span>
               <span class="tile-kind">{p.kind}</span>
               <span class="tile-name">{p.name}</span>
-              <span class="tile-hint">{selected === p.id ? 'Sedang dibuka' : 'Lihat proyek'}<i class="plus"></i></span>
+              <span class="tile-hint">{selected === p.id ? 'Sedang dibuka' : 'Lihat proyek'}<i class="arrow-icon">→</i></span>
             </button>
           </div>
         {/each}
@@ -304,7 +499,9 @@
                 <h3>{current.name}</h3>
                 <p class="desc">{current.desc}</p>
                 <ul>
-                  {#each current.points as pt}<li>{pt}</li>{/each}
+                  {#each current.points as pt, j}
+                    <li style="--li-d:{j}">{pt}</li>
+                  {/each}
                 </ul>
                 <div class="actions">
                   <a class="btn" href={current.url} target="_blank" rel="noopener noreferrer">
@@ -329,17 +526,26 @@
   </section>
 
   <section class="closing">
-    <div class="wrap">
+    <div class="wrap" use:observeReveal>
+      <p class="section-label light">Kolaborasi</p>
       <h2>Punya ide yang ingin dijadikan proyek?</h2>
       <p>Ceritakan lewat DM Instagram kami.</p>
-      <a class="btn" href={instagram} target="_blank" rel="noopener noreferrer">Kirim DM di @kalibata.project</a>
+      <a class="btn glow" href={instagram} target="_blank" rel="noopener noreferrer">
+        Kirim DM di @kalibata.project
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M5 11l6-6M6 5h5v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg>
+      </a>
     </div>
   </section>
 </main>
 
 <footer>
   <span>© {new Date().getFullYear()} Kalibata Project</span>
-  <a href={instagram} target="_blank" rel="noopener noreferrer">@kalibata.project</a>
+  <div class="footer-links">
+    <a href={instagram} target="_blank" rel="noopener noreferrer">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z"/></svg>
+      @kalibata.project
+    </a>
+  </div>
 </footer>
 
 <style>
@@ -349,85 +555,187 @@
     --cream: #fbf3ea;
     --green: #1fbf6b;
     --forest: #06361f;
-    --pad: clamp(1.25rem, 5vw, 4.5rem);
+    --pad: clamp(1rem, 5vw, 4.5rem);
     --grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .5 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
   }
   :global(html) { scroll-behavior: smooth; }
+  :global(*, *::before, *::after) { box-sizing: border-box; }
   :global(body) { margin: 0; background: var(--red); color: var(--cream); font-family: 'Archivo', system-ui, sans-serif; line-height: 1.55; overflow-x: hidden; -webkit-text-size-adjust: 100%; }
-  h1, h2, h3, .brand, .kind, .tile-name, .band span { font-family: 'Anton', 'Archivo', sans-serif; font-weight: 400; }
+  h1, h2, h3, .brand-text, .kind, .tile-name, .band span { font-family: 'Anton', 'Archivo', sans-serif; font-weight: 400; }
   a { color: inherit; text-decoration: none; }
   :global(:focus-visible) { outline: 3px solid var(--cream); outline-offset: 3px; }
   .wrap { width: 100%; max-width: 1440px; margin-inline: auto; }
 
-  .progress { position: fixed; inset: 0 0 auto 0; height: 5px; z-index: 20; background: var(--cream); mix-blend-mode: difference; transform: scaleX(0); transform-origin: 0 50%; pointer-events: none; }
+  /* Floating particles */
+  .particles { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+  .particle {
+    position: absolute; border-radius: 50%; background: var(--cream);
+    animation: float var(--speed) var(--delay) linear infinite;
+  }
+  @keyframes float {
+    0% { transform: translateY(100vh) rotate(0deg); }
+    100% { transform: translateY(-100px) rotate(720deg); }
+  }
 
+  .progress { position: fixed; inset: 0 0 auto 0; height: 4px; z-index: 30; background: linear-gradient(90deg, var(--cream), var(--green), var(--cream)); mix-blend-mode: difference; transform: scaleX(0); transform-origin: 0 50%; pointer-events: none; }
+
+  /* Buttons */
   .btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; align-self: flex-start; min-height: 48px; box-sizing: border-box;
     background: var(--cream); color: var(--maroon); font: inherit; font-weight: 700; border: 0; cursor: pointer;
-    padding: 0.8rem 1.5rem; border-radius: 0.6rem; transition: transform 0.15s, box-shadow 0.15s;
+    padding: 0.85rem 1.6rem; border-radius: 99px; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    position: relative; overflow: hidden;
   }
-  .btn.small { min-height: 44px; padding: 0.5rem 1.1rem; }
+  .btn::before {
+    content: ''; position: absolute; inset: 0; background: linear-gradient(135deg, rgba(255,255,255,0.4), transparent);
+    opacity: 0; transition: opacity 0.3s;
+  }
+  .btn.glow {
+    box-shadow: 0 0 0 0 rgba(251, 243, 234, 0), 0 4px 16px rgba(0,0,0,0.15);
+  }
+  .btn.small { min-height: 44px; padding: 0.5rem 1.2rem; font-size: 0.9rem; }
   .btn.ghost { background: transparent; color: inherit; box-shadow: inset 0 0 0 2px currentColor; }
-  .link { padding: 0.6rem 0.25rem; }
-  @media (hover: hover) { .btn:hover { transform: translate(-2px, -2px); box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.35); } }
+  .btn.hero-ghost { color: var(--cream); }
+  .link { padding: 0.6rem 0.25rem; position: relative; }
+  .link::after { content: ''; position: absolute; bottom: 0.4rem; left: 0.25rem; right: 0.25rem; height: 2px; background: var(--cream); transform: scaleX(0); transition: transform 0.3s; transform-origin: right; }
+  @media (hover: hover) {
+    .btn:hover { transform: translateY(-3px); box-shadow: 0 0 30px rgba(251, 243, 234, 0.25), 0 8px 24px rgba(0,0,0,0.2); }
+    .btn:hover::before { opacity: 1; }
+    .btn.glow:hover { box-shadow: 0 0 40px rgba(251, 243, 234, 0.35), 0 8px 32px rgba(0,0,0,0.25); }
+    .link:hover::after { transform: scaleX(1); transform-origin: left; }
+  }
 
-  /* Navigasi */
-  .nav { position: absolute; inset: 0 0 auto 0; z-index: 5; display: flex; justify-content: space-between; align-items: center; padding: 1rem var(--pad); }
-  .brand { font-size: 1.35rem; line-height: 1; text-transform: uppercase; letter-spacing: 0.02em; }
-  nav { display: flex; align-items: center; gap: 1rem; font-weight: 600; }
+  /* Navigation — Glassmorphism */
+  .nav {
+    position: fixed; inset: 0 0 auto 0; z-index: 15; display: flex; justify-content: space-between; align-items: center;
+    padding: 1rem var(--pad); transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .nav.scrolled {
+    background: rgba(126, 15, 20, 0.85); backdrop-filter: blur(20px) saturate(1.8);
+    -webkit-backdrop-filter: blur(20px) saturate(1.8);
+    padding-block: 0.7rem; box-shadow: 0 4px 30px rgba(0,0,0,0.15);
+  }
+  .brand { display: flex; align-items: center; gap: 0.6rem; }
+  .brand-logo { width: 42px; height: 42px; border-radius: 10px; object-fit: cover; transition: transform 0.3s; }
+  .nav.scrolled .brand-logo { width: 34px; height: 34px; }
+  .brand-text { font-size: 1.1rem; line-height: 1; text-transform: uppercase; letter-spacing: 0.02em; }
+  nav { display: flex; align-items: center; gap: 1.25rem; font-weight: 600; }
+  .nav-btn { background: rgba(251, 243, 234, 0.15); color: var(--cream); border: 1px solid rgba(251, 243, 234, 0.3); backdrop-filter: blur(10px); }
+  @media (hover: hover) { .nav-btn:hover { background: var(--cream); color: var(--maroon); } }
 
   /* Hero */
-  .hero { position: relative; min-height: 100svh; box-sizing: border-box; display: flex; flex-direction: column; justify-content: flex-end; padding: 6.5rem var(--pad) 3rem; perspective: 1400px; overflow: hidden; }
-  .hero::before, .closing::before { content: ''; position: absolute; inset: 0; background-image: var(--grain); opacity: 0.22; mix-blend-mode: multiply; pointer-events: none; }
-  .hero-in { position: relative; display: grid; gap: 1.75rem 3rem; width: 100%; max-width: 1600px; margin-inline: auto; grid-template-areas: 'art' 'title' 'foot'; transform-origin: 50% 0; will-change: transform, opacity; }
-  .hero-art { grid-area: art; position: relative; justify-self: center; width: min(100%, 420px, calc(34svh * 1.25)); aspect-ratio: 5 / 4; }
-  .stage.hs { position: absolute; width: auto; }
-  .stage.hs.a { right: 0; top: 0; width: 78%; }
-  .stage.hs.b { left: 0; bottom: 0; width: 56%; }
-  h1 { grid-area: title; margin: 0; text-transform: uppercase; font-size: clamp(3.4rem, 17vw, 9.5rem); line-height: 0.9; perspective: 900px; }
+  .hero { position: relative; min-height: 100svh; box-sizing: border-box; display: flex; flex-direction: column; justify-content: flex-end; padding: 7rem var(--pad) 3rem; perspective: 1400px; overflow: hidden; }
+  .hero::before { content: ''; position: absolute; inset: 0; background-image: var(--grain); opacity: 0.18; mix-blend-mode: multiply; pointer-events: none; z-index: 1; }
+  .hero::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 40%; background: linear-gradient(to top, rgba(126, 15, 20, 0.6), transparent); pointer-events: none; z-index: 1; }
+
+  /* Hero gradient orbs */
+  .hero-orbs { position: absolute; inset: 0; overflow: hidden; z-index: 0; }
+  .orb { position: absolute; border-radius: 50%; filter: blur(80px); opacity: 0.4; animation: orbFloat 20s ease-in-out infinite; }
+  .orb-1 { width: 500px; height: 500px; background: #ff6b35; top: -10%; right: -5%; animation-delay: 0s; }
+  .orb-2 { width: 400px; height: 400px; background: #7e0f14; bottom: -5%; left: -5%; animation-delay: -7s; }
+  .orb-3 { width: 300px; height: 300px; background: #fbf3ea; top: 40%; left: 30%; opacity: 0.15; animation-delay: -13s; }
+  @keyframes orbFloat {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    33% { transform: translate(30px, -40px) scale(1.05); }
+    66% { transform: translate(-20px, 20px) scale(0.95); }
+  }
+
+  .hero-in { position: relative; z-index: 2; display: grid; gap: 2rem 4rem; width: 100%; max-width: 1600px; margin-inline: auto; grid-template-areas: 'art' 'text'; transform-origin: 50% 0; will-change: transform, opacity; }
+  .hero-art { grid-area: art; position: relative; justify-self: center; width: min(100%, 440px, calc(36svh * 1.25)); aspect-ratio: 5 / 4; }
+
+  /* Slideshow */
+  .slide-card { position: absolute; inset: 0; opacity: 0; transform: scale(0.9) rotateY(12deg); transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1); pointer-events: none; }
+  .slide-card.active { opacity: 1; transform: scale(1) rotateY(0deg); pointer-events: auto; }
+  .slide-card.prev { opacity: 0; transform: scale(0.85) rotateY(-12deg); }
+  .stage.hs.single { position: absolute; inset: 0; width: 100%; }
+
+  .slide-indicators { position: absolute; bottom: -2.5rem; left: 0; right: 0; display: flex; gap: 0.5rem; justify-content: center; }
+  .indicator {
+    all: unset; cursor: pointer; position: relative; height: 4px; flex: 1; max-width: 80px;
+    background: rgba(251, 243, 234, 0.25); border-radius: 4px; overflow: hidden;
+    transition: background 0.3s;
+  }
+  .indicator-fill { position: absolute; inset: 0; background: var(--cream); border-radius: inherit; transform: scaleX(0); transform-origin: left; }
+  .indicator.active .indicator-fill { animation: fillBar 4s linear forwards; }
+  @keyframes fillBar { to { transform: scaleX(1); } }
+  .indicator-label { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; opacity: 0; transition: opacity 0.3s; }
+  .indicator:hover .indicator-label, .indicator.active .indicator-label { opacity: 1; }
+
+  .hero-text { grid-area: text; }
+  .hero-tag { display: inline-flex; align-items: center; gap: 0.5rem; font-weight: 700; font-size: 0.9rem; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.8; margin: 0 0 0.5rem; }
+  .tag-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--cream); animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.8); } }
+
+  h1 { margin: 0; text-transform: uppercase; font-size: clamp(3.2rem, 16vw, 9rem); line-height: 0.88; perspective: 900px; letter-spacing: -0.02em; }
   h1 span { display: block; transform-origin: 50% 100%; animation: flip 1s cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: calc(var(--d) * 120ms); }
   @keyframes flip { from { opacity: 0; transform: rotateX(-75deg) translateY(30%); } to { opacity: 1; transform: none; } }
-  .hero-foot { grid-area: foot; display: flex; flex-wrap: wrap; gap: 1.25rem 3rem; align-items: center; justify-content: space-between; border-top: 3px solid var(--cream); padding-top: 1.25rem; }
-  .hero-foot p { margin: 0; max-width: 44ch; font-size: clamp(1rem, 1.6vw, 1.2rem); }
+
+  .hero-foot { display: flex; flex-direction: column; gap: 1.5rem; margin-top: 1.75rem; padding-top: 1.5rem; border-top: 2px solid rgba(251, 243, 234, 0.3); }
+  .hero-foot p { margin: 0; max-width: 48ch; font-size: clamp(1rem, 1.5vw, 1.15rem); line-height: 1.6; opacity: 0.9; }
+  .hero-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+
+  /* Scroll hint */
+  .scroll-hint { position: absolute; bottom: 2rem; left: 50%; transform: translateX(-50%); z-index: 3; display: flex; flex-direction: column; align-items: center; gap: 0.5rem; animation: fadeInUp 1s 1.5s both; }
+  .scroll-mouse { width: 26px; height: 40px; border: 2px solid rgba(251, 243, 234, 0.5); border-radius: 13px; position: relative; }
+  .scroll-wheel { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); width: 3px; height: 8px; background: var(--cream); border-radius: 3px; animation: scrollWheel 2s ease-in-out infinite; }
+  @keyframes scrollWheel { 0% { opacity: 1; transform: translateX(-50%) translateY(0); } 100% { opacity: 0; transform: translateX(-50%) translateY(12px); } }
+  .scroll-hint span { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.15em; opacity: 0.5; }
+  @keyframes fadeInUp { from { opacity: 0; transform: translateX(-50%) translateY(20px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
 
   /* Pita berjalan */
-  .band { position: relative; z-index: 2; margin: -1.1rem -4vw -1.1rem; padding: 0.55rem 0; background: var(--maroon); color: var(--cream); transform: rotate(-2deg); overflow: hidden; white-space: nowrap; }
+  .band { position: relative; z-index: 2; margin: -1.1rem -4vw -1.1rem; padding: 0.7rem 0; background: var(--maroon); color: var(--cream); transform: rotate(-2deg); overflow: hidden; white-space: nowrap; }
   .band-track { display: inline-flex; animation: slide 34s linear infinite; will-change: transform; }
   .grp { display: inline-flex; }
   .band span { font-size: clamp(1.3rem, 3.2vw, 2.2rem); text-transform: uppercase; padding-right: 1.5rem; }
   @keyframes slide { to { transform: translateX(-50%); } }
 
+  /* Section labels */
+  .section-label { display: inline-block; font-weight: 800; font-size: 0.8rem; letter-spacing: 0.15em; text-transform: uppercase; margin: 0 0 0.75rem; padding: 0.4rem 1rem; border-radius: 99px; background: var(--maroon); color: var(--cream); }
+  .section-label.light { background: rgba(251, 243, 234, 0.15); color: var(--cream); }
+
   /* Bagian pilih proyek */
   .pick, .closing, footer { position: relative; z-index: 1; }
-  .pick { background: var(--cream); color: var(--maroon); padding: 4.5rem var(--pad) 5rem; }
-  .pick-head { margin-bottom: 2rem; }
+  .pick { background: var(--cream); color: var(--maroon); padding: 5rem var(--pad) 5rem; overflow: hidden; }
+  .pick-head { margin-bottom: 2.5rem; }
   .pick-head h2 { margin: 0; font-size: clamp(3.4rem, 12vw, 9.5rem); line-height: 0.9; text-transform: uppercase; }
-  .pick-head p { margin: 0.75rem 0 0; font-size: clamp(1.05rem, 1.8vw, 1.35rem); font-weight: 600; }
+  .pick-sub { margin: 0.75rem 0 0; font-size: clamp(1.05rem, 1.8vw, 1.35rem); font-weight: 600; opacity: 0.7; }
 
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 1.25rem; perspective: 1400px; }
-  .tile { position: relative; container-type: inline-size; min-height: clamp(340px, 56svh, 560px); border-radius: 1.75rem; overflow: hidden; will-change: transform; transition: outline-offset 0.2s; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 1.5rem; perspective: 1400px; }
+  .tile {
+    position: relative; container-type: inline-size; min-height: clamp(340px, 56svh, 560px);
+    border-radius: 1.75rem; overflow: hidden; will-change: transform;
+    transition: outline-offset 0.2s, box-shadow 0.4s;
+  }
+  .tile-shimmer {
+    position: absolute; inset: 0; z-index: 1; pointer-events: none; opacity: 0;
+    background: linear-gradient(105deg, transparent 40%, rgba(255,255,255,0.15) 45%, rgba(255,255,255,0.3) 50%, rgba(255,255,255,0.15) 55%, transparent 60%);
+    background-size: 300% 100%; transition: opacity 0.4s;
+  }
   .tile.songin { background: var(--maroon); color: var(--cream); --ring: var(--maroon); }
   .tile.petakilat { background: var(--green); color: var(--forest); --ring: var(--forest); }
   .tile.active { outline: 4px solid var(--ring); outline-offset: 6px; }
-  .tile-art { position: absolute; right: -3%; bottom: -3%; width: 68%; pointer-events: none; }
-  .pick-btn { all: unset; box-sizing: border-box; display: flex; flex-direction: column; align-items: flex-start; gap: 0.3rem; height: 100%; min-height: inherit; padding: clamp(1.25rem, 6cqw, 2.25rem); cursor: pointer; }
+  .tile-art { position: absolute; right: -3%; bottom: -3%; width: 68%; pointer-events: none; transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1); }
+  .pick-btn { all: unset; box-sizing: border-box; display: flex; flex-direction: column; align-items: flex-start; gap: 0.35rem; height: 100%; min-height: inherit; padding: clamp(1.25rem, 6cqw, 2.25rem); cursor: pointer; position: relative; z-index: 2; }
   .pick-btn::after { content: ''; position: absolute; inset: 0; border-radius: inherit; }
   .pick-btn:focus-visible::after { outline: 3px solid var(--cream); outline-offset: -8px; }
   .tile.petakilat .pick-btn:focus-visible::after { outline-color: var(--forest); }
-  .tile-kind { font-weight: 700; opacity: 0.85; }
+  .tile-number { font-size: 0.75rem; font-weight: 800; letter-spacing: 0.1em; opacity: 0.5; }
+  .tile-kind { font-weight: 700; opacity: 0.85; font-size: 0.95rem; }
   .tile-name { font-size: clamp(2.8rem, 19cqw, 8rem); line-height: 0.9; text-transform: uppercase; }
-  .tile-hint { margin-top: auto; display: inline-flex; align-items: center; background: var(--cream); color: var(--maroon); font-weight: 700; padding: 0.7rem 1.2rem; border-radius: 999px; transition: transform 0.2s; }
+  .tile-hint { margin-top: auto; display: inline-flex; align-items: center; gap: 0.5rem; background: var(--cream); color: var(--maroon); font-weight: 700; padding: 0.7rem 1.2rem; border-radius: 999px; transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
   .tile.petakilat .tile-hint { background: var(--forest); color: var(--cream); }
-  .plus { position: relative; display: inline-block; width: 0.9em; height: 0.9em; margin-left: 0.65rem; transition: transform 0.3s; }
-  .plus::before, .plus::after { content: ''; position: absolute; background: currentColor; border-radius: 2px; }
-  .plus::before { left: 0; right: 0; top: calc(50% - 1px); height: 2px; }
-  .plus::after { top: 0; bottom: 0; left: calc(50% - 1px); width: 2px; }
-  .tile.active .plus { transform: rotate(45deg); }
-  @media (hover: hover) { .tile:hover .tile-hint { transform: translateX(4px); } }
+  .arrow-icon { display: inline-block; transition: transform 0.3s; font-style: normal; }
+  .tile.active .arrow-icon { transform: rotate(90deg); }
+  @media (hover: hover) {
+    .tile:hover .tile-hint { transform: translateX(6px); gap: 0.75rem; }
+    .tile:hover .tile-art { transform: scale(1.05) rotate(-2deg); }
+    .tile:hover .tile-shimmer { opacity: 1; animation: shimmer 1.5s ease-in-out; }
+  }
+  @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
 
   /* Panel detail */
   .detail-wrap { scroll-margin-top: 1rem; }
-  .detail { margin-top: 1.25rem; display: grid; grid-template-columns: 1fr; gap: 1.5rem; align-items: center; padding: clamp(1.25rem, 4vw, 3.5rem); border-radius: 1.75rem; }
+  .detail { margin-top: 1.5rem; display: grid; grid-template-columns: 1fr; gap: 1.5rem; align-items: center; padding: clamp(1.25rem, 4vw, 3.5rem); border-radius: 1.75rem; }
   .detail .art { order: -1; }
   .detail.songin { background: var(--maroon); color: var(--cream); }
   .detail.petakilat { background: var(--green); color: var(--forest); }
@@ -437,7 +745,9 @@
   .kind { margin: 0; font-size: 1.1rem; letter-spacing: 0.04em; opacity: 0.85; }
   .detail h3 { margin: 0; font-size: clamp(3rem, 9vw, 7rem); line-height: 0.9; text-transform: uppercase; }
   .desc { margin: 0; max-width: 40ch; font-size: clamp(1.05rem, 1.7vw, 1.35rem); font-weight: 600; }
-  ul { margin: 0; padding: 0 0 0 1.1rem; max-width: 46ch; display: grid; gap: 0.4rem; }
+  ul { margin: 0; padding: 0 0 0 1.1rem; max-width: 46ch; display: grid; gap: 0.5rem; }
+  li { animation: fadeInLi 0.5s cubic-bezier(0.16, 1, 0.3, 1) both; animation-delay: calc(var(--li-d) * 100ms + 300ms); }
+  @keyframes fadeInLi { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: none; } }
   .actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
   .art { display: grid; place-items: center; }
 
@@ -448,11 +758,18 @@
   .layer.lift { filter: drop-shadow(0 16px 16px rgba(0, 0, 0, 0.28)); }
 
   /* Penutup */
-  .closing { background: var(--red); padding: 5rem var(--pad); overflow: hidden; }
+  .closing { background: var(--red); padding: 6rem var(--pad); overflow: hidden; position: relative; }
+  .closing::before { content: ''; position: absolute; inset: 0; background-image: var(--grain); opacity: 0.18; mix-blend-mode: multiply; pointer-events: none; }
   .closing .wrap { position: relative; display: flex; flex-direction: column; gap: 1.25rem; }
   .closing h2 { margin: 0; text-transform: uppercase; font-size: clamp(2.6rem, 8vw, 7rem); line-height: 0.95; max-width: 14ch; }
-  .closing p { margin: 0; font-size: 1.2rem; }
-  footer { background: var(--maroon); display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem; padding: 1.5rem var(--pad); font-size: 0.9rem; }
+  .closing p { margin: 0; font-size: 1.2rem; opacity: 0.9; }
+
+  /* Footer */
+  footer { background: var(--maroon); display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 0.75rem; padding: 1.5rem var(--pad); font-size: 0.85rem; opacity: 0.9; }
+  .footer-links a { display: inline-flex; align-items: center; gap: 0.4rem; transition: opacity 0.3s; }
+  @media (hover: hover) { .footer-links a:hover { opacity: 0.7; } }
+
+  /* ========== RESPONSIVE ========== */
 
   /* Tablet ke atas */
   @media (min-width: 700px) {
@@ -465,30 +782,60 @@
   }
   /* Desktop lebar: judul di kiri, ilustrasi 3D di kanan */
   @media (min-width: 1000px) {
-    .hero-in { grid-template-columns: 1.15fr 1fr; grid-template-areas: 'title art' 'foot foot'; align-items: end; }
-    .hero-art { width: min(100%, 600px, calc(52svh * 1.25)); justify-self: end; }
-    h1 { font-size: clamp(3.6rem, 10.5vw, 10rem); }
+    .hero-in { grid-template-columns: 1.15fr 1fr; grid-template-areas: 'text art'; align-items: center; }
+    .hero-art { width: min(100%, 560px, calc(52svh * 1.25)); justify-self: end; }
+    h1 { font-size: clamp(3.6rem, 10vw, 9.5rem); }
+    .scroll-hint { left: var(--pad); transform: none; }
   }
   /* Hero menempel, bagian proyek naik menutupinya */
   @media (min-width: 900px) and (min-height: 600px) {
     .hero { position: sticky; top: 0; z-index: 0; }
-    .pick { border-radius: 2rem 2rem 0 0; }
+    .pick { border-radius: 2rem 2rem 0 0; box-shadow: 0 -20px 60px rgba(0,0,0,0.15); }
   }
   /* HP kecil */
   @media (max-width: 599px) {
-    .stage.hs.b { display: none; }
-    .stage.hs.a { width: 100%; right: 0; }
     .actions .btn { flex: 1 1 100%; }
     .nav { gap: 0.5rem; }
-    .brand { font-size: 1.2rem; }
+    .brand-text { font-size: 0.95rem; }
+    .brand-logo { width: 34px; height: 34px; }
+    .hero { padding: 5.5rem var(--pad) 2.5rem; }
+    .hero-foot { gap: 1rem; }
+    .hero-actions { flex-direction: column; width: 100%; }
+    .hero-actions .btn { width: 100%; justify-content: center; }
+    .pick { padding: 3.5rem var(--pad) 3.5rem; }
+    .pick-head h2 { font-size: clamp(2.6rem, 14vw, 4rem); }
+    .closing { padding: 3.5rem var(--pad); }
+    .closing h2 { font-size: clamp(2rem, 9vw, 3.5rem); }
+    .detail { padding: clamp(1rem, 4vw, 2rem); }
+    .detail h3 { font-size: clamp(2.2rem, 12vw, 4rem); }
+    .tiles { grid-template-columns: 1fr; }
+    footer { flex-direction: column; align-items: center; text-align: center; padding: 1.2rem var(--pad); }
+    .scroll-hint { display: none; }
+    .slide-indicators { bottom: -2rem; }
+    .orb-1 { width: 300px; height: 300px; }
+    .orb-2 { width: 250px; height: 250px; }
+    .orb-3 { display: none; }
+  }
+  /* HP sangat kecil (width <= 360px) */
+  @media (max-width: 360px) {
+    :global(:root) { --pad: 0.75rem; }
+    h1 { font-size: clamp(2.4rem, 16vw, 3.4rem); }
+    .brand-text { font-size: 0.85rem; }
+    .tile-name { font-size: clamp(2.2rem, 16cqw, 4rem); }
+    .pick-btn { padding: clamp(1rem, 4cqw, 1.5rem); }
   }
   @media (max-height: 520px) and (orientation: landscape) {
     .hero-art { display: none; }
+    .hero-orbs { display: none; }
   }
   @media (prefers-reduced-motion: reduce) {
     :global(html) { scroll-behavior: auto; }
     h1 span { animation: none; }
     .band-track { animation: none; }
-    .btn, .tile, .tile-hint, .plus { transition: none; }
+    .btn, .tile, .tile-hint, .arrow-icon { transition: none; }
+    .particle, .orb { animation: none; }
+    .scroll-hint { display: none; }
+    .slide-card { transition: opacity 0.3s; transform: none !important; }
+    .slide-card.active { transform: none !important; }
   }
 </style>
