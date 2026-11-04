@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, tick as svelteTick } from 'svelte';
-  import { cubicOut } from 'svelte/easing';
+  import { cubicOut, cubicInOut } from 'svelte/easing';
+  import { fade, fly, scale as scaleTransition } from 'svelte/transition';
 
   type Project = {
     id: string; name: string; kind: string; desc: string;
@@ -34,12 +35,53 @@
     { val: '2026', label: 'Tahun Berdiri', icon: 'cal' },
   ];
 
-  // Isi nama dan foto nanti. photo: path gambar di folder public, contoh '/tim/nama.jpg'
-  // role dikosongkan dulu; kalau diisi, otomatis tampil di kartu
-  const team = [
-    { name:'Ricardo Gellael', role:'', photo:'', hue:'#ff6b35' },
-    { name:'Rayhan MA', role:'', photo:'', hue:'#1fbf6b' },
-    { name:'Juan APP', role:'', photo:'', hue:'#ffd36b' },
+  // === TEAM MEMBER DATA ===
+  type TeamMember = {
+    name: string;
+    role: string;
+    photo: string;
+    hue: string;
+    tagline: string;
+    about: string;
+    skills: string[];
+    contribution: string;
+    socials: { platform: string; url: string; label: string }[];
+  };
+
+  const team: TeamMember[] = [
+    {
+      name: 'Ricardo Gellael',
+      role: 'Member',
+      photo: '/team/ricardo-gellael.jpeg',
+      hue: '#ff6b35',
+      tagline: 'Kalibata Project team member.',
+      about: 'Bagian dari tim Kalibata Project yang membangun produk digital dari ide menjadi kenyataan.',
+      skills: ['Development', 'Problem Solving', 'Collaboration'],
+      contribution: 'Berperan aktif dalam pengembangan dan pertumbuhan produk-produk Kalibata Project.',
+      socials: [],
+    },
+    {
+      name: 'Rayhan MA',
+      role: 'Member',
+      photo: '/team/rayhan-ma.jpeg',
+      hue: '#1fbf6b',
+      tagline: 'Kalibata Project team member.',
+      about: 'Bagian dari tim Kalibata Project yang membangun produk digital dari ide menjadi kenyataan.',
+      skills: ['Development', 'Problem Solving', 'Collaboration'],
+      contribution: 'Berperan aktif dalam pengembangan dan pertumbuhan produk-produk Kalibata Project.',
+      socials: [],
+    },
+    {
+      name: 'Juan AP',
+      role: 'Member',
+      photo: '/team/juan-ap.jpg',
+      hue: '#ffd36b',
+      tagline: 'Kalibata Project team member.',
+      about: 'Bagian dari tim Kalibata Project yang membangun produk digital dari ide menjadi kenyataan.',
+      skills: ['Development', 'Problem Solving', 'Collaboration'],
+      contribution: 'Berperan aktif dalam pengembangan dan pertumbuhan produk-produk Kalibata Project.',
+      socials: [],
+    },
   ];
 
   const steps = [
@@ -50,6 +92,233 @@
   ];
 
   const bandText = projects.map(p => p.name).join(' ✦ ') + ' ✦ Where ideas become projects ✦ ';
+
+  // === DITHER SHADER (Bayer 8x8, duotone) ===
+  type DitherOpts = { hue: string; photo?: string; cell?: number };
+
+  const BAYER = (() => {
+    let m: number[][] = [[0]];
+    for (let n = 1; n < 8; n *= 2) {
+      const s = m.length;
+      const nx: number[][] = Array.from({ length: s * 2 }, () => Array(s * 2).fill(0));
+      for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+        const v = m[y][x] * 4;
+        nx[y][x] = v; nx[y][x + s] = v + 2; nx[y + s][x] = v + 3; nx[y + s][x + s] = v + 1;
+      }
+      m = nx;
+    }
+    return m.flat().map(v => (v + .5) / 64);
+  })();
+
+  const hex2rgb = (h: string): number[] => { const n = parseInt(h.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+  const smooth = (a: number, b: number, x: number) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  const DARK = hex2rgb('#2a0306');
+
+  // blur kotak sederhana (dua arah) untuk kontras lokal pada foto
+  function boxBlur(a: Float32Array, W: number, H: number, r: number) {
+    const t = new Float32Array(a.length), o = new Float32Array(a.length), k = 2 * r + 1;
+    const cl = (v: number, m: number) => Math.min(m, Math.max(0, v));
+    for (let y = 0; y < H; y++) {
+      let acc = 0;
+      for (let x = -r; x <= r; x++) acc += a[y * W + cl(x, W - 1)];
+      for (let x = 0; x < W; x++) { t[y * W + x] = acc / k; acc += a[y * W + cl(x + r + 1, W - 1)] - a[y * W + cl(x - r, W - 1)]; }
+    }
+    for (let x = 0; x < W; x++) {
+      let acc = 0;
+      for (let y = -r; y <= r; y++) acc += t[cl(y, H - 1) * W + x];
+      for (let y = 0; y < H; y++) { o[y * W + x] = acc / k; acc += t[cl(y + r + 1, H - 1) * W + x] - t[cl(y - r, H - 1) * W + x]; }
+    }
+    return o;
+  }
+
+  // Action: gambar siluet potret ber-dither. Kalau ada foto, foto itu yang di-dither.
+  function dither(node: HTMLElement, opts: DitherOpts) {
+    const canvas = document.createElement('canvas');
+    node.appendChild(canvas);
+    const ctx = canvas.getContext('2d', { alpha: false })!;
+    let o = opts, w = 8, h = 8, img = ctx.createImageData(8, 8);
+    let src: Float32Array | null = null;
+    let cl = hex2rgb(o.hue), to = cl;
+    const reduce = noMo();
+    let pulse = reduce ? 0 : 1, px = .5, py = .38, tx = .5, ty = .38;
+    let visible = true, raf = 0, last = 0;
+
+    const loadPhoto = () => {
+      src = null;
+      if (!o.photo) return;
+      const im = new Image(); im.crossOrigin = 'anonymous';
+      im.onload = () => {
+        try {
+          const oc = document.createElement('canvas'); oc.width = w; oc.height = h;
+          const c2 = oc.getContext('2d')!;
+          c2.imageSmoothingQuality = 'high';
+          const k = Math.max(w / im.width, h / im.height), dw = im.width * k, dh = im.height * k;
+          c2.drawImage(im, (w - dw) / 2, (h - dh) / 2, dw, dh);
+          const d = c2.getImageData(0, 0, w, h).data, a = new Float32Array(w * h);
+          for (let i = 0; i < a.length; i++) a[i] = (d[i * 4] * .299 + d[i * 4 + 1] * .587 + d[i * 4 + 2] * .114) / 255;
+          // auto-levels (persentil 3–97), angkat midtone, lalu kontras lokal agar wajah tetap terbaca
+          const sorted = Float32Array.from(a).sort();
+          const lo = sorted[Math.floor(a.length * .03)], hi = sorted[Math.floor(a.length * .97)];
+          for (let i = 0; i < a.length; i++) a[i] = Math.pow(Math.min(1, Math.max(0, (a[i] - lo) / Math.max(hi - lo, .05))), .8);
+          const bl = boxBlur(a, w, h, Math.max(3, Math.round(w * .07)));
+          for (let i = 0; i < a.length; i++) a[i] = Math.min(1, Math.max(0, a[i] + .9 * (a[i] - bl[i])));
+          src = a;
+        } catch { src = null; }
+        if (reduce) draw(performance.now());
+      };
+      im.src = o.photo;
+    };
+
+    const size = () => {
+      const c = o.cell ?? 4;
+      w = Math.max(8, Math.round(node.clientWidth / c));
+      h = Math.max(8, Math.round(node.clientHeight / c));
+      canvas.width = w; canvas.height = h;
+      img = ctx.createImageData(w, h);
+      loadPhoto();
+      draw(performance.now());
+    };
+
+    function draw(now: number) {
+      const t = now / 1000, a = w / h, d = img.data;
+      pulse *= .94;
+      px += (tx - px) * .12; py += (ty - py) * .12;
+      for (let i = 0; i < 3; i++) cl[i] += (to[i] - cl[i]) * .12;
+      const gx = (px - .5) * a;
+      for (let y = 0; y < h; y++) {
+        const Y = y / h;
+        for (let x = 0; x < w; x++) {
+          const X = (x / w - .5) * a;
+          let L: number;
+          if (src) { const sw = (t * .22) % 1.5 - .25; L = (src[y * w + x] ?? 0) + .16 * Math.exp(-Math.pow((Y - sw) * 9, 2)); }
+          else {
+            const head = Math.hypot(X, Y - .42) - .17;
+            const body = (Math.hypot(X / .42, (Y - 1.05) / .36) - 1) * .36;
+            const m = 1 - smooth(-.012, .02, Math.min(head, body));
+            const pl = .5 + .5 * Math.sin(X * 7 + t * .7 + Math.sin(Y * 5 - t * .5) * 1.4) * Math.cos(Y * 6 - t * .4 + X * 2);
+            L = m * ((.62 - Y * .22) + .18 * pl) + (1 - m) * (.08 + .3 * pl * pl);
+          }
+          const gd = (X - gx) * (X - gx) + (Y - py) * (Y - py);
+          L += .55 * Math.exp(-gd * 26);
+          const B = BAYER[((y & 7) << 3) | (x & 7)];
+          const wipe = pulse > .01 ? pulse * (.3 + .7 * BAYER[((y & 7) << 3) | ((x * 5 + y * 3) & 7)]) : 0;
+          const c = L + (B - .5) * .9 - wipe > .5 ? cl : DARK;
+          const p = (y * w + x) * 4;
+          d[p] = c[0]; d[p + 1] = c[1]; d[p + 2] = c[2]; d[p + 3] = 255;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+    }
+
+    const loop = (now: number) => {
+      raf = requestAnimationFrame(loop);
+      if (!visible || now - last < 33) return;
+      last = now; draw(now);
+    };
+
+    const rect = () => node.getBoundingClientRect();
+    const mv = (e: PointerEvent) => { const r = rect(); tx = (e.clientX - r.left) / r.width; ty = (e.clientY - r.top) / r.height; if (reduce) draw(performance.now()); };
+    const lv = () => { tx = .5; ty = .38; };
+    node.addEventListener('pointermove', mv); node.addEventListener('pointerleave', lv);
+    const ro = new ResizeObserver(size); ro.observe(node);
+    const io = new IntersectionObserver(es => { visible = es[0].isIntersecting; }); io.observe(node);
+    size();
+    if (!reduce) raf = requestAnimationFrame(loop);
+
+    return {
+      update(n: DitherOpts) {
+        const hue = n.hue !== o.hue, ph = n.photo !== o.photo, ce = n.cell !== o.cell;
+        o = n; to = hex2rgb(o.hue);
+        if (hue || ph) pulse = reduce ? 0 : 1;
+        if (ce) size(); else if (ph) loadPhoto();
+        if (reduce) { cl = to; draw(performance.now()); }
+      },
+      destroy() {
+        cancelAnimationFrame(raf); ro.disconnect(); io.disconnect();
+        node.removeEventListener('pointermove', mv); node.removeEventListener('pointerleave', lv);
+        canvas.remove();
+      }
+    };
+  }
+
+  // === TEAM: ROSTER + PROFILE SHEET ===
+  const STAGE_CELL = 4;
+  const PIXELS = [{ n: 'Halus', c: 3 }, { n: 'Sedang', c: 5 }, { n: 'Kasar', c: 8 }];
+  const TABS = [{ id: 'about', l: 'Tentang' }, { id: 'skills', l: 'Keahlian' }, { id: 'work', l: 'Kontribusi' }] as const;
+
+  let activeTeam = 0;
+  let teamModalOpen = false;
+  let teamModalIdx = -1;
+  let tab: 'about' | 'skills' | 'work' = 'about';
+  let pixIdx = 1;
+  let dir = 1;
+  let modalX = 0, modalY = 0;
+  let tmEl: HTMLDivElement | null = null;
+  let closeBtn: HTMLButtonElement | null = null;
+  let lastFocus: HTMLElement | null = null;
+  $: teamModalMember = teamModalIdx >= 0 ? team[teamModalIdx] : null;
+  $: tabIdx = TABS.findIndex(t => t.id === tab);
+
+  function openTeamModal(i: number, e?: MouseEvent) {
+    lastFocus = (e?.currentTarget as HTMLElement) ?? null;
+    modalX = e && e.clientX ? e.clientX : innerWidth / 2;
+    modalY = e && e.clientY ? e.clientY : innerHeight / 2;
+    teamModalIdx = i; activeTeam = i; tab = 'about'; dir = 1;
+    teamModalOpen = true;
+    document.body.style.overflow = 'hidden';
+    svelteTick().then(() => closeBtn?.focus());
+  }
+
+  function closeTeamModal() {
+    teamModalOpen = false;
+    document.body.style.overflow = '';
+    lastFocus?.focus({ preventScroll: true });
+  }
+
+  function stepMember(d: number) {
+    dir = d; tab = 'about';
+    teamModalIdx = (teamModalIdx + d + team.length) % team.length;
+    activeTeam = teamModalIdx;
+  }
+
+  function onModalKeydown(e: KeyboardEvent) {
+    if (!teamModalOpen) return;
+    if (e.key === 'Escape') { closeTeamModal(); return; }
+    if (e.key === 'ArrowRight') { stepMember(1); return; }
+    if (e.key === 'ArrowLeft') { stepMember(-1); return; }
+    if (e.key === 'Tab' && tmEl) {
+      const f = [...tmEl.querySelectorAll<HTMLElement>('button,a[href]')].filter(el => el.offsetParent !== null);
+      if (!f.length) return;
+      const first = f[0], lastEl = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); lastEl.focus(); }
+      else if (!e.shiftKey && document.activeElement === lastEl) { e.preventDefault(); first.focus(); }
+    }
+  }
+
+  // Lembar profil membuka seperti lingkaran yang melebar dari titik klik
+  function reveal(node: Element, { x = innerWidth / 2, y = innerHeight / 2, duration = 650 } = {}) {
+    return {
+      duration: noMo() ? 0 : duration,
+      easing: cubicInOut,
+      css: (t: number) => `clip-path:circle(${t * 150}% at ${x}px ${y}px)`
+    };
+  }
+
+  function stagger(node: Element, { duration = 450, delay = 0 } = {}) {
+    return {
+      duration: noMo() ? 0 : duration,
+      delay: noMo() ? 0 : delay,
+      easing: cubicOut,
+      css: (t: number) => `opacity:${t};transform:translateY(${(1 - t) * 22}px)`
+    };
+  }
+
+  // Di layar sentuh tidak ada hover, jadi sorotan berpindah sendiri
+  onMount(() => {
+    if (matchMedia('(hover:hover)').matches || noMo()) return;
+    const id = setInterval(() => { if (!teamModalOpen) activeTeam = (activeTeam + 1) % team.length; }, 3200);
+    return () => clearInterval(id);
+  });
 
   // State
   let mode: 'browse' | 'detail' = 'browse';
@@ -238,6 +507,20 @@
     {:else}<rect x="3" y="9" width="18" height="12" rx="1.5"/><path d="M12 9v12M3 13h18M12 9C9 9 7 8 7 6s3-2 5 3c2-5 5-5 5-3s-2 3-5 3"/>{/if}
   </svg>
 {/snippet}
+
+{#snippet socialIcon(platform: string)}
+  {#if platform === 'instagram'}
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z"/></svg>
+  {:else if platform === 'github'}
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+  {:else if platform === 'linkedin'}
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.064 2.064 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>
+  {:else}
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
+  {/if}
+{/snippet}
+
+<svelte:window on:keydown={onModalKeydown} />
 
 <div class="particles" aria-hidden="true">{#each particles as p}<div class="particle" style="left:{p.x}%;top:{p.y}%;width:{p.s}px;height:{p.s}px;opacity:{p.o};--sp:{p.sp}s;--dl:{p.d}s"></div>{/each}</div>
 <div class="progress" bind:this={bar} aria-hidden="true"></div>
@@ -453,20 +736,113 @@
         <h2>Tiga<br/>kepala.</h2>
         <p class="proj-sub">Orang-orang di balik Kalibata Project.</p>
       </div>
-      <div class="team-grid">
-        {#each team as m, i}
-          <div class="tslot" use:obs data-delay={i*140}>
-            <article class="tcard" use:tilt style="--h:{m.hue};--ti:{i}">
-              <div class="avatar"><span class="a-ring"></span><span class="a-init">{#if m.photo}<img src={m.photo} alt={m.name} loading="lazy"/>{:else}{@render icon('user')}{/if}</span></div>
-              <span class="t-num">0{i+1}</span>
-              <h3>{m.name}</h3>
-              {#if m.role}<p class="t-role">{m.role}</p>{/if}
-            </article>
-          </div>
-        {/each}
+      <div class="roster">
+        <div class="stage" use:obs aria-hidden="true">
+          <div class="stage-screen" use:dither={{ hue: team[activeTeam].hue, photo: team[activeTeam].photo, cell: STAGE_CELL }}></div>
+          <span class="hud hud-tl">Fig. 0{activeTeam + 1}</span>
+          <span class="hud hud-tr">Bayer 8×8</span>
+          <span class="hud hud-bl">{team[activeTeam].name}</span>
+          <span class="hud hud-br">{STAGE_CELL}px</span>
+        </div>
+        <ol class="rows">
+          {#each team as m, i}
+            <li use:obs data-delay={i * 120}>
+              <button class="row" class:on={activeTeam === i} style="--h:{m.hue}"
+                on:pointerenter={() => (activeTeam = i)} on:focus={() => (activeTeam = i)}
+                on:click={(e) => openTeamModal(i, e)} aria-label="Lihat profil {m.name}">
+                <span class="row-name">{m.name}</span>
+                <span class="row-role">{m.role || 'Member'}</span>
+                <span class="row-go" aria-hidden="true">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                </span>
+              </button>
+            </li>
+          {/each}
+        </ol>
       </div>
     </div>
   </section>
+
+  <!-- ===== PROFIL TIM (LEMBAR PENUH) ===== -->
+  {#if teamModalOpen && teamModalMember}
+    <div class="tm" role="dialog" aria-modal="true" aria-label="Profil {teamModalMember.name}"
+      bind:this={tmEl} style="--h:{teamModalMember.hue}"
+      transition:reveal={{ x: modalX, y: modalY }}>
+      <div class="tm-visual">
+        <div class="tm-screen" use:dither={{ hue: teamModalMember.hue, photo: teamModalMember.photo, cell: PIXELS[pixIdx].c }}></div>
+        <button class="tm-pixel" on:click={() => (pixIdx = (pixIdx + 1) % PIXELS.length)} aria-label="Ganti ukuran piksel">
+          Piksel · {PIXELS[pixIdx].n}
+        </button>
+      </div>
+
+      <div class="tm-panel">
+        <div class="tm-top">
+          <span>Kalibata Project / Tim</span>
+          <button class="tm-close" bind:this={closeBtn} on:click={closeTeamModal} aria-label="Tutup profil">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        {#key teamModalIdx}
+          <div class="tm-body" in:fly={{ x: dir * 48, duration: 480, easing: cubicOut }}>
+            <p class="tm-role">{teamModalMember.role || 'Team Member'}</p>
+            <h2 class="tm-name">{teamModalMember.name}</h2>
+            <p class="tm-tagline">{teamModalMember.tagline}</p>
+
+            <div class="tm-tabs" role="tablist" style="--i:{tabIdx}">
+              {#each TABS as t}
+                <button class="tm-tab" role="tab" aria-selected={tab === t.id} on:click={() => (tab = t.id)}>{t.l}</button>
+              {/each}
+              <span class="tm-ind" aria-hidden="true"></span>
+            </div>
+
+            {#key tab}
+              <div class="tm-pane" role="tabpanel" in:stagger={{ duration: 380 }}>
+                {#if tab === 'about'}
+                  <p>{teamModalMember.about}</p>
+                {:else if tab === 'skills'}
+                  <ul class="tm-skills">
+                    {#each teamModalMember.skills as skill, si}
+                      <li in:stagger={{ delay: si * 70, duration: 380 }}>{skill}</li>
+                    {/each}
+                  </ul>
+                {:else}
+                  <p>{teamModalMember.contribution}</p>
+                  <div class="tm-links">
+                    {#each projects as p}
+                      <a class="tm-link" href={p.url} target="_blank" rel="noopener noreferrer">{p.name} ↗</a>
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/key}
+
+            <div class="tm-links">
+              {#each teamModalMember.socials as s}
+                <a class="tm-link" href={s.url} target="_blank" rel="noopener noreferrer" aria-label={s.label}>
+                  {@render socialIcon(s.platform)}<span>{s.label}</span>
+                </a>
+              {:else}
+                <a class="tm-link" href={ig} target="_blank" rel="noopener noreferrer">
+                  {@render socialIcon('instagram')}<span>@kalibata.project</span>
+                </a>
+              {/each}
+            </div>
+          </div>
+        {/key}
+
+        <nav class="tm-nav" aria-label="Navigasi anggota tim">
+          <button class="tm-step" on:click={() => stepMember(-1)}>
+            <small>← Sebelumnya</small><span>{team[(teamModalIdx + team.length - 1) % team.length].name}</span>
+          </button>
+          <div class="tm-count" aria-hidden="true">{#each team as _, i}<i class:on={i === teamModalIdx}></i>{/each}</div>
+          <button class="tm-step next" on:click={() => stepMember(1)}>
+            <small>Berikutnya →</small><span>{team[(teamModalIdx + 1) % team.length].name}</span>
+          </button>
+        </nav>
+      </div>
+    </div>
+  {/if}
 
   <!-- CLOSING -->
   <section class="closing">
@@ -750,24 +1126,75 @@
   .badge .ico{width:.95em;height:.95em}
 
   /* ===== TIM ===== */
-  .team{position:relative;z-index:1;background:var(--cream);color:var(--maroon);padding:4.5rem 0 4rem}
-  .team-head{margin-bottom:2rem}.team-head h2{margin:0;font-size:clamp(2.6rem,9vw,6.5rem);line-height:.88;text-transform:uppercase}
-  .team-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:1.2rem}
-  @media(min-width:900px){.tslot:nth-child(2){margin-top:2rem}}
-  .tcard{position:relative;overflow:hidden;text-align:center;padding:2rem 1.2rem 1.6rem;border-radius:1.3rem;background:var(--maroon);color:var(--cream);box-shadow:0 10px 30px rgba(126,15,20,.18);transform:perspective(900px) rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg));transition:transform .18s ease-out,box-shadow .4s}
-  .tcard::before{content:'';position:absolute;inset:0;background:radial-gradient(circle at var(--gx,30%) var(--gy,20%),rgba(255,255,255,.2),transparent 60%);pointer-events:none}
-  .tcard>*{position:relative;z-index:1}
-  .avatar{position:relative;width:104px;aspect-ratio:1;margin:0 auto 1rem;display:grid;place-items:center;animation:fb 4s ease-in-out infinite;animation-delay:calc(var(--ti)*-.9s)}
-  .a-ring{position:absolute;inset:-7px;border-radius:50%;background:conic-gradient(var(--h),var(--cream),var(--h));animation:cspin 6s linear infinite;-webkit-mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px));mask:radial-gradient(farthest-side,transparent calc(100% - 4px),#000 calc(100% - 3px))}
-  .a-init{width:100%;height:100%;border-radius:50%;display:grid;place-items:center;font-family:'Anton',sans-serif;font-size:2.2rem;background:radial-gradient(circle at 30% 25%,var(--h),#3a0508 90%);color:var(--cream);text-shadow:0 2px 6px rgba(0,0,0,.35);overflow:hidden;font-size:2.6rem}
-  .a-init img{width:100%;height:100%;object-fit:cover}
-  .t-num{display:block;font-size:.6rem;font-weight:800;letter-spacing:.1em;opacity:.35}
-  .tcard h3{margin:.2rem 0 0;font-size:1.7rem;line-height:1;text-transform:uppercase}
-  .t-role{margin:.5rem 0 0;font-size:.78rem;font-weight:700;opacity:.65;text-transform:uppercase;letter-spacing:.05em}
-  @media(hover:hover){.tcard:hover{box-shadow:0 18px 44px rgba(126,15,20,.3)}}
+  /* ===== TIM: ROSTER + DITHER ===== */
+  .team{position:relative;z-index:1;background:var(--red);color:var(--cream);padding:5rem 0 4.5rem;overflow:hidden}
+  .team::before{content:'';position:absolute;inset:0;background:radial-gradient(55% 45% at 90% 5%,rgba(255,255,255,.16),transparent 70%),radial-gradient(60% 50% at 5% 100%,rgba(126,15,20,.45),transparent 70%);pointer-events:none}
+  .team .wrap{position:relative}
+  .team .label{background:var(--cream);color:var(--maroon)}
+  .team .proj-sub{opacity:.85}
+  .team-head{margin-bottom:2.5rem}.team-head h2{margin:0;font-size:clamp(2.6rem,9vw,6.5rem);line-height:.88;text-transform:uppercase}
+  .roster{display:grid;grid-template-columns:1fr;gap:1.6rem;align-items:start}
+  @media(min-width:900px){.roster{grid-template-columns:minmax(300px,.75fr) 1.4fr;gap:3.5rem}.stage{position:sticky;top:5rem}}
 
-  @media(max-width:599px){.team{padding:3rem 0 2.5rem}}
-  @media(prefers-reduced-motion:reduce){.a-ring,.avatar,.badge.paid,.cstep{animation:none}.tcard{transition:none}}
+  .stage{position:relative;width:min(100%,340px);margin-inline:auto;border-radius:1.2rem;overflow:hidden;border:1px solid rgba(251,243,234,.16);background:#240407;box-shadow:0 24px 60px rgba(58,5,8,.55)}
+  .stage-screen{position:relative;aspect-ratio:4/5;width:100%;cursor:crosshair;touch-action:pan-y}
+  .stage-screen :global(canvas),.tm-screen :global(canvas){position:absolute;inset:0;width:100%;height:100%;display:block;image-rendering:pixelated}
+  .hud{position:absolute;z-index:2;font-size:.6rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--cream);mix-blend-mode:difference;pointer-events:none}
+  .hud-tl{top:.8rem;left:.9rem}.hud-tr{top:.8rem;right:.9rem}.hud-bl{bottom:.8rem;left:.9rem}.hud-br{bottom:.8rem;right:.9rem}
+
+  .rows{list-style:none;margin:0;padding:0;border-top:1px solid rgba(251,243,234,.35)}
+  .row{all:unset;box-sizing:border-box;position:relative;isolation:isolate;overflow:hidden;cursor:pointer;width:100%;display:grid;grid-template-columns:1fr auto;grid-template-areas:"name go" "role go";align-items:center;column-gap:1.3rem;padding:1.3rem .4rem;border-bottom:1px solid rgba(251,243,234,.35)}
+  .row::before{content:'';position:absolute;inset:0;z-index:-1;background:linear-gradient(90deg,rgba(126,15,20,.55),transparent 78%);transform:scaleX(0);transform-origin:left;transition:transform .6s cubic-bezier(.16,1,.3,1)}
+  .row.on::before{transform:scaleX(1)}
+  .row-name{grid-area:name;font-family:'Anton','Archivo',sans-serif;font-size:clamp(2rem,6.2vw,4.6rem);line-height:1.02;text-transform:uppercase;color:transparent;-webkit-text-stroke:1.4px rgba(251,243,234,.8);transition:color .35s,-webkit-text-stroke-color .35s,translate .55s cubic-bezier(.16,1,.3,1)}
+  .row.on .row-name{color:var(--cream);-webkit-text-stroke-color:var(--cream);translate:.9rem 0}
+  .row-role{grid-area:role;font-size:.72rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;opacity:.8;transition:translate .55s cubic-bezier(.16,1,.3,1)}
+  .row.on .row-role{translate:.9rem 0}
+  .row-go{grid-area:go;display:grid;place-items:center;width:3rem;height:3rem;border-radius:50%;border:1px solid rgba(251,243,234,.55);transition:all .45s cubic-bezier(.16,1,.3,1)}
+  .row.on .row-go{background:var(--h);border-color:var(--h);color:#1c0204;rotate:-45deg}
+  .row:focus-visible,.tm button:focus-visible,.tm a:focus-visible{outline:3px solid var(--cream);outline-offset:-3px}
+
+  /* ===== PROFIL TIM (LEMBAR PENUH) ===== */
+  .tm{position:fixed;inset:0;z-index:100;display:grid;grid-template-columns:1fr;grid-template-rows:minmax(0,32dvh) minmax(0,1fr);background:#1c0204;color:var(--cream);overflow:hidden}
+  @media(min-width:900px){.tm{grid-template-columns:minmax(0,1.05fr) minmax(0,1fr);grid-template-rows:1fr}}
+  .tm-visual{position:relative;overflow:hidden;background:#240407}
+  .tm-screen{position:absolute;inset:0;cursor:crosshair;touch-action:pan-y}
+  .tm-pixel{all:unset;cursor:pointer;position:absolute;z-index:3;top:1rem;left:1rem;padding:.5rem .9rem;border-radius:99px;background:rgba(28,2,4,.7);border:1px solid rgba(251,243,234,.3);backdrop-filter:blur(6px);font-size:.68rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;transition:all .3s}
+  @media(hover:hover){.tm-pixel:hover{background:var(--cream);color:#1c0204}}
+
+  .tm-panel{position:relative;display:flex;flex-direction:column;min-height:0;padding:clamp(.9rem,2.5vw,2rem) clamp(1.1rem,4vw,3.2rem) 0;overflow-y:auto;overscroll-behavior:contain}
+  .tm-top{display:flex;justify-content:space-between;align-items:center;gap:1rem;font-size:.68rem;font-weight:800;letter-spacing:.14em;text-transform:uppercase}
+  .tm-top span{opacity:.5}
+  .tm-close{all:unset;cursor:pointer;display:grid;place-items:center;width:44px;height:44px;border-radius:50%;border:1px solid rgba(251,243,234,.28);transition:all .4s cubic-bezier(.16,1,.3,1)}
+  @media(hover:hover){.tm-close:hover{background:var(--cream);color:#1c0204;rotate:90deg}}
+  .tm-body{display:flex;flex-direction:column;gap:1.1rem;padding:1.2rem 0 1rem}
+  .tm-role{align-self:flex-start;margin:0;padding:.3rem .85rem;border-radius:99px;background:var(--h);color:#1c0204;font-size:.7rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase}
+  .tm-name{margin:0;font-family:'Anton','Archivo',sans-serif;font-weight:400;font-size:clamp(2.6rem,7vw,5.4rem);line-height:.92;text-transform:uppercase}
+  .tm-tagline{margin:0;opacity:.6;font-style:italic;max-width:42ch}
+  .tm-tabs{position:relative;display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid rgba(251,243,234,.2)}
+  .tm-tab{all:unset;cursor:pointer;text-align:center;padding:.85rem .3rem;font-size:.72rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;opacity:.5;transition:opacity .3s}
+  .tm-tab[aria-selected=true]{opacity:1}
+  @media(hover:hover){.tm-tab:hover{opacity:.9}}
+  .tm-ind{position:absolute;left:0;bottom:-1px;width:calc(100%/3);height:3px;background:var(--h);transform:translateX(calc(var(--i)*100%));transition:transform .5s cubic-bezier(.16,1,.3,1)}
+  .tm-pane{display:flex;flex-direction:column;gap:1rem;min-height:9.5rem}
+  .tm-pane p{margin:0;line-height:1.75;opacity:.85;max-width:52ch}
+  .tm-skills{display:grid;gap:.55rem;margin:0;padding:0;list-style:none}
+  .tm-skills li{display:flex;align-items:center;gap:.9rem;padding:.75rem 1rem;border-radius:.85rem;border:1px solid rgba(251,243,234,.16);font-weight:700;transition:border-color .3s,background .3s,translate .4s cubic-bezier(.16,1,.3,1)}
+  @media(hover:hover){.tm-skills li:hover{border-color:var(--h);background:color-mix(in srgb,var(--h) 16%,transparent);translate:.35rem 0}}
+  .tm-links{display:flex;flex-wrap:wrap;gap:.5rem}
+  .tm-link{display:inline-flex;align-items:center;gap:.45rem;padding:.55rem .95rem;border-radius:99px;border:1px solid rgba(251,243,234,.28);font-size:.78rem;font-weight:700;transition:all .3s}
+  @media(hover:hover){.tm-link:hover{background:var(--cream);color:#1c0204;translate:0 -2px}}
+  .tm-nav{position:sticky;bottom:0;margin-top:auto;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:.8rem;padding:1rem 0 calc(1rem + env(safe-area-inset-bottom));background:linear-gradient(to top,#1c0204 72%,transparent)}
+  .tm-step{all:unset;cursor:pointer;display:flex;flex-direction:column;gap:.15rem;min-width:0;padding:.4rem .3rem}
+  .tm-step small{font-size:.6rem;letter-spacing:.14em;text-transform:uppercase;font-weight:800;opacity:.5}
+  .tm-step span{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .tm-step.next{text-align:right}
+  @media(hover:hover){.tm-step:hover small{opacity:1;color:var(--h)}}
+  .tm-count{display:flex;gap:.35rem}
+  .tm-count i{width:1.2rem;height:3px;border-radius:2px;background:rgba(251,243,234,.25);transition:all .45s cubic-bezier(.16,1,.3,1)}
+  .tm-count i.on{width:2.4rem;background:var(--h)}
+
+  @media(prefers-reduced-motion:reduce){.row::before,.row-name,.row-role,.row-go,.tm-ind,.tm-close,.tm-skills li,.tm-link{transition:none}.row.on .row-name,.row.on .row-role{translate:none}}
 
   /* kredit di detail proyek */
   .cred{margin-top:.4rem;padding:.9rem 1rem;border-radius:1rem;background:rgba(6,54,31,.1);max-width:46ch}
