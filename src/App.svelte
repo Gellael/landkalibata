@@ -59,7 +59,7 @@
       skills: ['Development', 'Problem Solving', 'Collaboration'],
       contribution: 'Berperan aktif dalam pengembangan dan pertumbuhan produk-produk Kalibata Project.',
       socials: [
-        { platform: 'instagram', url: 'https://www.instagram.com/ricardogellael', label: 'Ricardo Gellael' }
+        { platform: 'instagram', url: 'https://www.instagram.com/ricardo_gellael', label: 'Ricardo Gellael' }
       ],
     },
     {
