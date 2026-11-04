@@ -58,7 +58,9 @@
       about: 'Bagian dari tim Kalibata Project yang membangun produk digital dari ide menjadi kenyataan.',
       skills: ['Development', 'Problem Solving', 'Collaboration'],
       contribution: 'Berperan aktif dalam pengembangan dan pertumbuhan produk-produk Kalibata Project.',
-      socials: [],
+      socials: [
+        { platform: 'instagram', url: 'https://www.instagram.com/ricardogellael', label: 'Ricardo Gellael' }
+      ],
     },
     {
       name: 'Rayhan MA',
@@ -69,7 +71,9 @@
       about: 'Bagian dari tim Kalibata Project yang membangun produk digital dari ide menjadi kenyataan.',
       skills: ['Development', 'Problem Solving', 'Collaboration'],
       contribution: 'Berperan aktif dalam pengembangan dan pertumbuhan produk-produk Kalibata Project.',
-      socials: [],
+      socials: [
+        { platform: 'instagram', url: 'https://www.instagram.com/rayhanma__', label: 'Rayhan MA' }
+      ],
     },
     {
       name: 'Juan AP',
@@ -80,7 +84,9 @@
       about: 'Bagian dari tim Kalibata Project yang membangun produk digital dari ide menjadi kenyataan.',
       skills: ['Development', 'Problem Solving', 'Collaboration'],
       contribution: 'Berperan aktif dalam pengembangan dan pertumbuhan produk-produk Kalibata Project.',
-      socials: [],
+      socials: [
+        { platform: 'instagram', url: 'https://www.instagram.com/juan_agraprana', label: 'Juan AP' }
+      ],
     },
   ];
 
