@@ -471,6 +471,152 @@
     raf=requestAnimationFrame(frame);
     return()=>{cancelAnimationFrame(raf);stopAuto();removeEventListener('resize',onR);removeEventListener('pointermove',onP);removeEventListener('scroll',onScroll);};
   });
+
+  // === MINIGAME FOOTER: kuda melompati rintangan ===
+  function kfGame(node: HTMLElement) {
+    const svg = node.querySelector('svg') as SVGSVGElement;
+    const jumpG = node.querySelector('.kf-jump') as SVGGElement;
+    const layer = node.querySelector('.kf-obs') as SVGGElement;
+    const scoreEl = node.querySelector('.kf-score') as HTMLElement;
+    const hint = node.querySelector('.kf-hint') as HTMLElement;
+    const NS = 'http://www.w3.org/2000/svg';
+    const GROUND = 305, HX0 = 546, HX1 = 594, GRAV = 1500, V0 = 520;
+    type Ob = { el: SVGGElement; x: number; w: number; h: number };
+    type Dash = { el: SVGPathElement; x: number; y: number; f: number };
+    let state: 'idle' | 'run' | 'over' = 'idle';
+    let obs: Ob[] = [], dashes: Dash[] = [];
+    let y = 0, vy = 0, speed = 320, score = 0, best = 0, gap = 0, raf = 0, last = 0, overAt = 0;
+    try { best = parseInt(localStorage.getItem('kalibata-kuda-best') || '0', 10) || 0; } catch {}
+
+    const pad = (n: number) => String(Math.floor(n)).padStart(5, '0');
+    const put = (el: Element, x: number, yy: number | string) => el.setAttribute('transform', `translate(${x.toFixed(1)} ${yy})`);
+    const showHint = (t: string | null) => { hint.hidden = t === null; if (t) hint.textContent = t; };
+    const hud = () => { scoreEl.textContent = state === 'idle' && !best ? '' : `Skor ${pad(score)} · Rekor ${pad(best)}`; };
+    // rentang x (satuan viewBox) yang benar-benar terlihat, karena svg memakai "slice"
+    const view = () => {
+      const r = svg.getBoundingClientRect();
+      const vw = r.width / Math.max(r.width / 1440, r.height / 360);
+      return { x0: (1440 - vw) / 2, x1: (1440 + vw) / 2 };
+    };
+
+    const mkDash = (x: number): Dash => {
+      const yy = 246 + Math.random() * 100;
+      const el = document.createElementNS(NS, 'path') as SVGPathElement;
+      el.setAttribute('d', `M0 0h${(20 + Math.random() * 50).toFixed(0)}`);
+      el.setAttribute('stroke', '#7e0f14'); el.setAttribute('stroke-width', '1.6');
+      el.setAttribute('stroke-linecap', 'round'); el.setAttribute('opacity', '.2');
+      put(el, x, yy.toFixed(1));
+      layer.appendChild(el);
+      return { el, x, y: yy, f: 0.6 + ((yy - 236) / 124) * 0.6 };
+    };
+
+    const spawn = (x: number) => {
+      const g = document.createElementNS(NS, 'g') as SVGGElement;
+      const r = Math.random();
+      let w = 24, h = 16;
+      if (r < 0.4) {
+        g.innerHTML = '<path d="M-13 0L-10-9-3-15 6-13 13-6 15 0Z" fill="#7e0f14" stroke="#7e0f14" stroke-width="2" stroke-linejoin="round"/>';
+      } else {
+        const n = r < 0.8 ? 1 : 2;
+        w = n === 1 ? 22 : 46; h = 26;
+        for (let i = 0; i < n; i++) {
+          const u = document.createElementNS(NS, 'use');
+          u.setAttribute('href', '#kf-tuft');
+          u.setAttribute('transform', `translate(${n === 1 ? 0 : i ? 13 : -13} 0) scale(1.15)`);
+          g.appendChild(u);
+        }
+      }
+      put(g, x, GROUND);
+      layer.appendChild(g);
+      obs.push({ el: g, x, w, h });
+    };
+
+    const clearObs = () => { obs.forEach(o => o.el.remove()); obs = []; };
+    const resetHorse = () => { jumpG.style.translate = '0 0'; jumpG.style.rotate = ''; node.classList.remove('kf-run', 'kf-over', 'kf-air'); };
+
+    const reset = () => {
+      cancelAnimationFrame(raf); state = 'idle'; y = vy = 0;
+      clearObs(); resetHorse(); showHint('Ketuk atau tekan Spasi untuk main'); hud();
+    };
+
+    const end = (now: number) => {
+      state = 'over'; overAt = now; cancelAnimationFrame(raf);
+      if (Math.floor(score) > best) {
+        best = Math.floor(score);
+        try { localStorage.setItem('kalibata-kuda-best', String(best)); } catch {}
+      }
+      node.classList.remove('kf-run', 'kf-air'); node.classList.add('kf-over');
+      jumpG.style.transformBox = 'fill-box'; jumpG.style.transformOrigin = '50% 100%'; jumpG.style.rotate = '-10deg';
+      showHint('Game over · ketuk untuk ulang'); hud();
+    };
+
+    const loop = (now: number) => {
+      raf = requestAnimationFrame(loop);
+      const dt = Math.min((now - last) / 1000, 0.05); last = now;
+      const { x0, x1 } = view();
+      speed = Math.min(620, speed + 7 * dt);
+      score += dt * speed * 0.03;
+
+      if (y > 0 || vy > 0) {
+        vy -= GRAV * dt; y += vy * dt;
+        if (y <= 0) { y = 0; vy = 0; node.classList.remove('kf-air'); }
+      }
+      jumpG.style.translate = `0 ${(-y).toFixed(1)}px`;
+
+      gap -= speed * dt;
+      if (gap <= 0) { spawn(x1 + 40); gap = speed * (0.95 + Math.random() * 0.9) + 80; }
+
+      for (const o of obs) { o.x -= speed * dt; put(o.el, o.x, GROUND); }
+      for (let i = obs.length - 1; i >= 0; i--) if (obs[i].x < x0 - 60) { obs[i].el.remove(); obs.splice(i, 1); }
+      for (const d of dashes) {
+        d.x -= speed * dt * d.f;
+        if (d.x < x0 - 90) d.x = x1 + Math.random() * 80;
+        put(d.el, d.x, d.y.toFixed(1));
+      }
+      hud();
+
+      for (const o of obs) {
+        if (o.x + o.w / 2 > HX0 && o.x - o.w / 2 < HX1 && y < o.h - 3) { end(now); return; }
+      }
+    };
+
+    const start = () => {
+      clearObs(); resetHorse();
+      y = vy = 0; speed = 320; score = 0; gap = 520; last = performance.now();
+      node.classList.add('kf-run'); state = 'run'; showHint(null); hud();
+      const { x0, x1 } = view();
+      if (!dashes.length) for (let i = 0; i < 14; i++) dashes.push(mkDash(x0 + Math.random() * (x1 - x0)));
+      cancelAnimationFrame(raf); raf = requestAnimationFrame(loop);
+    };
+
+    const press = () => {
+      if (state === 'idle') start();
+      else if (state === 'over') { if (performance.now() - overAt > 350) start(); }
+      else if (y === 0) { vy = V0; y = 0.01; node.classList.add('kf-air'); }
+    };
+
+    const onDown = () => { if (state === 'run') press(); };
+    const onClick = () => { node.focus({ preventScroll: true }); if (state !== 'run') press(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (state === 'run' && (e.code === 'Space' || e.code === 'ArrowUp')) { e.preventDefault(); press(); return; }
+      if (document.activeElement === node && (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'Enter')) { e.preventDefault(); press(); }
+    };
+
+    node.addEventListener('pointerdown', onDown);
+    node.addEventListener('click', onClick);
+    addEventListener('keydown', onKey);
+    const io = new IntersectionObserver(es => { if (!es[0].isIntersecting && state === 'run') reset(); });
+    io.observe(node);
+    showHint('Ketuk atau tekan Spasi untuk main'); hud();
+
+    return {
+      destroy() {
+        cancelAnimationFrame(raf); io.disconnect();
+        node.removeEventListener('pointerdown', onDown); node.removeEventListener('click', onClick);
+        removeEventListener('keydown', onKey);
+      }
+    };
+  }
 </script>
 
 <svelte:head>
@@ -864,12 +1010,100 @@
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
 </a>
 
-<footer>
-  <span>© {new Date().getFullYear()} Kalibata Project</span>
-  <a href={ig} target="_blank" rel="noopener noreferrer" class="fig">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z"/></svg>
-    @kalibata.project
-  </a>
+<footer class="kf">
+  <div class="wrap kf-main">
+    <div class="kf-brand">
+      <a class="kf-logo" href="#top"><img src="/logo.png" alt="" /><span>Kalibata<br/>Project</span></a>
+      <p class="kf-tag">Where ideas become projects. Produk digital dari ide, langsung bisa dipakai siapa saja.</p>
+      <ul class="kf-contact">
+        <li><a href={ig} target="_blank" rel="noopener noreferrer">{@render socialIcon('instagram')}<span>@kalibata.project</span></a></li>
+        <li><a href="https://kalibataproject.my.id" target="_blank" rel="noopener noreferrer">{@render socialIcon('web')}<span>kalibataproject.my.id</span></a></li>
+      </ul>
+    </div>
+
+    <div class="kf-col">
+      <h4>Jelajahi</h4>
+      <ul>
+        <li><a href="#about">Tentang kami</a></li>
+        <li><a href="#proyek">Semua proyek</a></li>
+        <li><a href="#tim">Tim pengembang</a></li>
+      </ul>
+    </div>
+
+    <div class="kf-col">
+      <h4>Proyek</h4>
+      <ul>
+        {#each projects as p}
+          <li><a href={p.url} target="_blank" rel="noopener noreferrer">{p.name}</a></li>
+        {/each}
+      </ul>
+    </div>
+
+    <div class="kf-col">
+      <h4>Kolaborasi</h4>
+      <p class="kf-note">Punya ide atau pertanyaan? Ceritakan lewat DM Instagram kami.</p>
+      <a class="kf-cta" href={ig} target="_blank" rel="noopener noreferrer">Kirim DM <span aria-hidden="true">→</span></a>
+    </div>
+
+    <div class="kf-legal">
+      <span>© {new Date().getFullYear()} Kalibata Project</span>
+      <i aria-hidden="true"></i>
+      <span>Since 2026</span>
+    </div>
+  </div>
+
+  <!-- Lanskap bergaya ukiran: bukit berarsir, dataran krem, penunggang kuda -->
+  <div class="kf-game" use:kfGame role="button" tabindex="0" aria-label="Minigame: lompatkan kuda melewati rintangan. Ketuk atau tekan Spasi.">
+  <svg class="kf-land" viewBox="0 0 1440 360" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
+    <defs>
+      <pattern id="kf-h1" width="8" height="5" patternUnits="userSpaceOnUse"><path d="M0 2.5h8" stroke="#fbf3ea" stroke-width="1.1" opacity=".55"/></pattern>
+      <pattern id="kf-h2" width="8" height="3.4" patternUnits="userSpaceOnUse"><path d="M0 1.7h8" stroke="#fbf3ea" stroke-width="1.15"/></pattern>
+      <pattern id="kf-h3" width="8" height="2.4" patternUnits="userSpaceOnUse"><path d="M0 1.2h8" stroke="#fbf3ea" stroke-width="1.2"/></pattern>
+      <linearGradient id="kf-fade" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#d4181f" stop-opacity=".85"/><stop offset=".7" stop-color="#d4181f" stop-opacity="0"/></linearGradient>
+      <g id="kf-tuft" fill="none" stroke="#7e0f14" stroke-width="1.7" stroke-linecap="round"><path d="M0 0C-1-9-5-16-12-22M0 0C0-10-1-18 1-27M0 0C2-9 6-15 13-21M0 0C-3-6-9-9-17-11M0 0C3-6 9-8 17-8M0 0C-1-5-3-8-6-10"/></g>
+    </defs>
+
+    <!-- punggung bukit jauh -->
+    <path d="M0 190C70 150 150 148 235 172S395 160 520 172 700 150 800 166L960 150C1010 118 1050 92 1110 88C1170 84 1215 112 1262 140S1390 158 1440 148V236H0Z" fill="url(#kf-h1)" stroke="#fbf3ea" stroke-width="1.6" stroke-linejoin="round"/>
+    <!-- mesa kanan -->
+    <path d="M1010 150C1050 112 1075 82 1125 76C1175 72 1205 100 1250 138L1262 148Z" fill="url(#kf-h2)" stroke="#fbf3ea" stroke-width="1.4"/>
+    <!-- bukit tengah -->
+    <path d="M0 214C110 184 250 190 380 206S610 192 770 202 1040 186 1200 196 1380 190 1440 200V246H0Z" fill="url(#kf-h3)" stroke="#fbf3ea" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M0 214C110 184 250 190 380 206S610 192 770 202 1040 186 1200 196 1380 190 1440 200V246H0Z" fill="url(#kf-fade)"/>
+
+    <!-- dataran -->
+    <path d="M0 236C200 226 420 234 700 229S1220 227 1440 231V360H0Z" fill="#fbf3ea"/>
+    <g stroke="#7e0f14" stroke-linecap="round" opacity=".22" fill="none">
+      <path d="M30 250h70M260 258h110M470 246h60M700 252h120M900 262h90M1110 250h110M1290 258h70M150 286h90M380 300h120M820 292h100M1180 296h120"/>
+    </g>
+
+    <!-- rintangan & garis tanah (diisi minigame) -->
+    <g class="kf-obs"></g>
+
+    <!-- penunggang kuda -->
+    <g transform="translate(560 270) scale(1.08)">
+      <ellipse cx="0" cy="33" rx="42" ry="4" fill="#7e0f14" opacity=".22"/>
+      <g class="kf-jump"><g class="kf-rider" fill="#7e0f14" stroke="#7e0f14" stroke-linecap="round" stroke-linejoin="round">
+        <ellipse cx="0" cy="0" rx="26" ry="11" stroke="none"/>
+        <path d="M17-7L29-30 38-28 29-2Z" stroke-width="2"/>
+        <ellipse cx="40" cy="-21" rx="10" ry="4.6" transform="rotate(48 40 -21)" stroke="none"/>
+        <path d="M30-31l1-6 4 5Z" stroke-width="1"/>
+        <path d="M18 7L28 31M23 7L11 27M-20 7L-30 31M-15 7L-5 29" fill="none" stroke-width="4"/>
+        <path d="M-25-4C-40 0-43 14-38 25" fill="none" stroke-width="4"/>
+        <path d="M0-11L2-32M0-8L10 6" fill="none" stroke-width="6"/>
+        <path d="M2-30L14-23" fill="none" stroke-width="3"/>
+        <circle cx="3" cy="-40" r="4.6" stroke="none"/>
+        <ellipse cx="3" cy="-44" rx="10" ry="2.2" stroke="none"/>
+        <path d="M-1-44l2-8h8l2 8Z" stroke="none"/>
+      </g></g>
+    </g>
+
+    <!-- rumpun rumput -->
+    <g>{#each [[218,244,0.39],[1369,246,0.4],[1259,247,0.41],[962,248,0.42],[731,250,0.43],[297,250,0.43],[1106,250,0.43],[1010,251,0.43],[97,251,0.44],[131,252,0.44],[147,253,0.46],[913,255,0.47],[321,257,0.5],[357,258,0.5],[170,260,0.52],[704,260,0.52],[169,262,0.54],[334,263,0.55],[838,264,0.56],[234,267,0.59],[827,270,0.63],[1175,277,0.71],[843,278,0.72],[217,279,0.74],[76,281,0.76],[381,281,0.76],[1273,283,0.78],[177,283,0.79],[816,284,0.8],[963,286,0.82],[1255,286,0.83],[1090,289,0.87],[1191,290,0.88],[956,295,0.95],[889,300,1.02],[1260,301,1.03],[211,301,1.04],[1409,301,1.04],[90,303,1.07],[1272,303,1.07],[39,303,1.06],[378,308,1.14],[214,310,1.18],[1365,312,1.2],[536,313,1.22],[104,314,1.24],[1430,314,1.24],[616,317,1.29],[78,317,1.29],[856,319,1.32],[415,323,1.38],[825,327,1.45],[1007,330,1.5],[1244,332,1.55],[410,333,1.55],[232,334,1.56],[1360,335,1.59],[1430,336,1.6],[417,337,1.62],[1149,338,1.65],[452,339,1.65],[1123,341,1.7],[217,347,1.81],[994,347,1.8],[67,349,1.85],[170,350,1.86]] as t}<use href="#kf-tuft" transform="translate({t[0]} {t[1]}) scale({t[2]})"/>{/each}</g>
+  </svg>
+    <div class="kf-hud"><span class="kf-score"></span></div>
+    <div class="kf-hint" hidden></div>
+  </div>
 </footer>
 
 <style>
@@ -1209,4 +1443,58 @@
   .cstep-ico{display:grid;place-items:center;flex:none;width:2rem;height:2rem;border-radius:50%;background:linear-gradient(135deg,#ffd36b,#e8a317);color:#4a2c00;font-size:1rem;animation:cpop 2.8s ease-in-out infinite;animation-delay:calc(var(--ld)*.35s)}
   @keyframes cpop{0%,70%,100%{transform:none}80%{transform:scale(1.18) rotate(-8deg)}}
   .cstep-txt{display:flex;flex-direction:column;line-height:1.3}.cstep-txt strong{font-size:.85rem}.cstep-txt span{font-size:.74rem;opacity:.7}
+
+  /* ===== FOOTER LANSKAP ===== */
+  /* selector footer.kf sengaja lebih spesifik agar menimpa aturan `footer` lama */
+  footer.kf{position:relative;display:block;overflow:hidden;opacity:1;text-align:left;background:var(--red);color:var(--cream);padding:4.2rem 0 0;font-size:inherit;gap:0}
+  footer.kf::before{content:'';position:absolute;inset:0;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .5 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");opacity:.12;mix-blend-mode:multiply;pointer-events:none}
+  footer.kf::after{content:'';position:absolute;inset:0 0 auto 0;height:1px;background:rgba(251,243,234,.18)}
+
+  .kf-main{position:relative;z-index:1;display:grid;grid-template-columns:1fr;gap:2rem 2.5rem;padding-bottom:2.2rem}
+  .kf-logo{display:inline-flex;align-items:center;gap:.6rem}
+  .kf-logo img{width:40px;height:40px;border-radius:9px;object-fit:cover}
+  .kf-logo span{font-family:'Anton','Archivo',sans-serif;font-size:1.15rem;line-height:1;text-transform:uppercase;letter-spacing:.02em}
+  .kf-tag{margin:.9rem 0 0;max-width:34ch;font-style:italic;font-size:.86rem;line-height:1.6;opacity:.85}
+
+  footer.kf ul{list-style:none;margin:0;padding:0;max-width:none;display:grid;gap:.55rem}
+  footer.kf li{animation:none}
+  .kf-contact{margin-top:1.1rem!important}
+  .kf-contact a{display:inline-flex;align-items:center;gap:.6rem;font-size:.84rem;opacity:.9}
+
+  .kf-col h4{margin:0 0 1.15rem;padding-bottom:.7rem;position:relative;font-family:'Archivo',system-ui,sans-serif;font-weight:700;font-size:.72rem;letter-spacing:.16em;text-transform:uppercase}
+  .kf-col h4::after{content:'';position:absolute;left:0;bottom:0;width:26px;height:1px;background:var(--cream);opacity:.7}
+  .kf-col li a{position:relative;font-size:.86rem;opacity:.9;transition:opacity .3s}
+  .kf-note{margin:0 0 1rem;max-width:30ch;font-style:italic;font-size:.84rem;line-height:1.6;opacity:.85}
+  .kf-cta{display:inline-flex;align-items:center;gap:.5rem;padding:.6rem 1.15rem;border:1px solid rgba(251,243,234,.7);font-size:.82rem;font-weight:700;transition:background .3s,color .3s}
+  .kf-cta span{transition:translate .35s cubic-bezier(.16,1,.3,1)}
+
+  .kf-legal{display:flex;align-items:center;gap:.8rem;font-size:.72rem;font-style:italic;opacity:.8}
+  .kf-legal i{width:1px;height:.9em;background:var(--cream);opacity:.6}
+
+  .kf-game{position:relative;z-index:0;display:block;margin-top:.5rem;cursor:pointer;touch-action:pan-y;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}
+  .kf-game:focus-visible{outline:2px dashed var(--cream);outline-offset:-6px}
+  .kf-land{display:block;width:100%;height:clamp(200px,25vw,380px)}
+  .kf-hud{position:absolute;top:.7rem;right:var(--pad);font-size:.7rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase;font-variant-numeric:tabular-nums;pointer-events:none}
+  .kf-hint{position:absolute;left:50%;top:.9rem;translate:-50% 0;padding:.45rem .95rem;border-radius:99px;background:var(--maroon);color:var(--cream);font-size:.68rem;font-weight:800;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap;pointer-events:none;box-shadow:0 4px 14px rgba(0,0,0,.18)}
+  :global(.kf-run) .kf-rider{animation-duration:.3s}
+  :global(.kf-air) .kf-rider{animation-play-state:paused}
+  :global(.kf-over) .kf-rider{animation:none}
+  .kf-rider{animation:kfride 1.1s ease-in-out infinite}
+  @keyframes kfride{50%{translate:0 -2.5px}}
+
+  @media(hover:hover){
+    .kf-contact a:hover,.kf-col li a:hover{opacity:1}
+    .kf-col li a::after{content:'';position:absolute;left:0;right:0;bottom:-2px;height:1px;background:var(--cream);transform:scaleX(0);transform-origin:right;transition:transform .35s cubic-bezier(.16,1,.3,1)}
+    .kf-col li a:hover::after{transform:scaleX(1);transform-origin:left}
+    .kf-cta:hover{background:var(--cream);color:var(--maroon)}
+    .kf-cta:hover span{translate:4px 0}
+  }
+  @media(min-width:600px){.kf-main{grid-template-columns:repeat(2,1fr)}.kf-brand{grid-column:1/-1}}
+  @media(min-width:960px){
+    .kf-main{grid-template-columns:1.5fr 1fr 1fr 1.3fr;column-gap:3rem}
+    .kf-brand{grid-column:auto}
+    .kf-legal{grid-column:1/-1;justify-content:flex-end;margin-top:.6rem}
+  }
+  @media(max-width:599px){footer.kf{padding-top:3rem;text-align:left}.kf-land{height:190px}}
+  @media(prefers-reduced-motion:reduce){.kf-rider{animation:none}.kf-cta,.kf-cta span,.kf-col li a,.kf-col li a::after{transition:none}}
 </style>
