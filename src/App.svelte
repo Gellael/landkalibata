@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, tick as svelteTick } from 'svelte';
   import { cubicOut, cubicInOut } from 'svelte/easing';
-  import { fade, fly, scale as scaleTransition } from 'svelte/transition';
+  import { fly } from 'svelte/transition';
 
   type Project = {
     id: string; name: string; kind: string; desc: string;
@@ -710,7 +710,7 @@
     <div class="scroll-h" aria-hidden="true"><div class="smouse"><div class="swheel"></div></div></div>
   </section>
 
-  <div class="band" aria-hidden="true" bind:this={bandEl}><div class="band-t">{#each [0,1] as _}<div class="grp">{#each [0,1,2] as _}<span>{bandText}</span>{/each}</div>{/each}</div></div>
+  <div class="band-wrap" aria-hidden="true"><div class="band" bind:this={bandEl}><div class="band-t">{#each [0,1] as _}<div class="grp">{#each [0,1,2] as _}<span>{bandText}</span>{/each}</div>{/each}</div></div></div>
 
   <!-- ===== ABOUT / PORTFOLIO ===== -->
   <section id="about" class="about">
@@ -1108,8 +1108,8 @@
 
 <style>
   :global(:root){--red:#d4181f;--maroon:#7e0f14;--cream:#fbf3ea;--green:#1fbf6b;--forest:#06361f;--pad:clamp(1rem,5vw,4.5rem)}
-  :global(html){scroll-behavior:smooth}
-  :global(body){margin:0;background:var(--red);color:var(--cream);font-family:'Archivo',system-ui,sans-serif;line-height:1.55;overflow-x:hidden;-webkit-text-size-adjust:100%}
+  :global(html){scroll-behavior:smooth;overflow-x:clip}
+  :global(body){margin:0;background:var(--red);color:var(--cream);font-family:'Archivo',system-ui,sans-serif;line-height:1.55;overflow-x:hidden;overflow-x:clip;-webkit-text-size-adjust:100%}
   h1,h2,h3,h4,.brand-text,.cname,.band span{font-family:'Anton','Archivo',sans-serif;font-weight:400}
   a{color:inherit;text-decoration:none}:global(:focus-visible){outline:3px solid var(--cream);outline-offset:3px}
   .wrap{width:100%;max-width:1440px;margin-inline:auto;padding-inline:var(--pad)}
@@ -1140,9 +1140,6 @@
   .o1{width:40vw;max-width:400px;aspect-ratio:1;background:#ff6b35;top:-8%;right:-5%}.o2{width:34vw;max-width:340px;aspect-ratio:1;background:#7e0f14;bottom:-6%;left:-4%;animation-delay:-10s}
   @keyframes ob{0%,100%{transform:translate(0,0) scale(1)}33%{transform:translate(18px,-28px) scale(1.03)}66%{transform:translate(-10px,10px) scale(.97)}}
   .hero-inner{position:relative;z-index:2;max-width:640px}
-  .tag{display:inline-flex;align-items:center;gap:.4rem;font-weight:700;font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;opacity:.55;margin:0 0 .6rem;animation:fu .8s .2s both}
-  .tdot{width:6px;height:6px;border-radius:50%;background:var(--cream);animation:pu 2s ease-in-out infinite}
-  @keyframes pu{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.6)}}
   h1{margin:0;text-transform:uppercase;font-size:clamp(2.4rem,11vw,7rem);line-height:.87;letter-spacing:-.02em;perspective:900px}
   h1 span{display:block;transform-origin:50% 100%;animation:fp 1s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(var(--d)*130ms)}
   @keyframes fp{from{opacity:0;transform:rotateX(-75deg) translateY(30%)}to{opacity:1;transform:none}}
@@ -1155,7 +1152,8 @@
   @keyframes sw{0%{opacity:1;transform:translateX(-50%)}100%{opacity:0;transform:translateX(-50%) translateY(7px)}}
 
   .hero-inner,.hero-bg,.band{will-change:transform}
-  .band{position:relative;z-index:2;margin:-1rem -4vw;padding:.45rem 0;background:var(--maroon);color:var(--cream);transform:rotate(-2deg);overflow:hidden;white-space:nowrap}
+  .band-wrap{position:relative;z-index:2;margin:-2.6rem 0;padding:1.6rem 0;overflow-x:clip;pointer-events:none}
+  .band{position:relative;margin:0 -6vw;padding:.45rem 0;background:var(--maroon);color:var(--cream);transform:rotate(-2deg);overflow:hidden;white-space:nowrap}
   .band-t{display:inline-flex;animation:sl 36s linear infinite}.grp{display:inline-flex}
   .band span{font-size:clamp(.95rem,2.4vw,1.5rem);text-transform:uppercase;padding-right:1.3rem}
   @keyframes sl{to{transform:translateX(-50%)}}
@@ -1279,15 +1277,12 @@
   .closing .wrap{position:relative;display:flex;flex-direction:column;gap:.85rem}
   .closing h2{margin:0;text-transform:uppercase;font-size:clamp(1.8rem,6vw,4.5rem);line-height:.93;max-width:14ch}
   .closing p{margin:0;font-size:.95rem;opacity:.7}
-  footer{background:var(--maroon);display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:.4rem;padding:1rem var(--pad);font-size:.72rem;opacity:.7}
-  .fig{display:inline-flex;align-items:center;gap:.25rem;transition:opacity .3s}@media(hover:hover){.fig:hover{opacity:.5}}
 
   .totop{position:fixed;right:max(1rem,env(safe-area-inset-right));bottom:max(1rem,env(safe-area-inset-bottom));z-index:20;display:grid;place-items:center;width:44px;height:44px;border-radius:50%;background:var(--maroon);color:var(--cream);box-shadow:0 6px 20px rgba(0,0,0,.25);opacity:0;transform:translateY(14px) scale(.8);pointer-events:none;transition:opacity .35s,transform .35s cubic-bezier(.34,1.56,.64,1)}
   .totop.show{opacity:1;transform:none;pointer-events:auto}
   @media(hover:hover){.totop.show:hover{transform:translateY(-3px)}}
   .stat{transition:transform .3s}@media(hover:hover){.stat:hover{transform:translateY(-4px) rotate(-1deg)}}
   .nav{padding-top:max(.75rem,env(safe-area-inset-top))}
-  footer{padding-bottom:max(1rem,env(safe-area-inset-bottom))}
 
   .ico{width:1em;height:1em;stroke-width:1.7;overflow:visible}
   .cemoji .ico,.stat-icon .ico{margin-inline:auto}.mc-icon{color:var(--red)}
@@ -1342,7 +1337,6 @@
     .cbody{border-radius:.85rem}
     .det-body{padding:clamp(.7rem,3vw,1rem)}.det h3{font-size:clamp(1.7rem,9vw,2.5rem)}.det-btns .btn{flex:1 1 100%}
     .closing{padding:2.5rem 0}.closing h2{font-size:clamp(1.5rem,7vw,2.2rem)}
-    footer{flex-direction:column;align-items:center;text-align:center}
     .arrow{width:34px;height:34px}
   }
   @media(max-width:360px){:global(:root){--pad:.55rem}h1{font-size:clamp(1.7rem,13vw,2.4rem)}.brand-text{font-size:.68rem}.cname{font-size:clamp(1.4rem,8vw,1.8rem)}}
@@ -1364,7 +1358,6 @@
   .badge.inl{position:static;align-self:flex-start}
   .badge .ico{width:.95em;height:.95em}
 
-  /* ===== TIM ===== */
   /* ===== TIM: ROSTER + DITHER ===== */
   .team{position:relative;z-index:1;background:var(--red);color:var(--cream);padding:5rem 0 4.5rem;overflow:hidden}
   .team::before{content:'';position:absolute;inset:0;background:radial-gradient(55% 45% at 90% 5%,rgba(255,255,255,.16),transparent 70%),radial-gradient(60% 50% at 5% 100%,rgba(126,15,20,.45),transparent 70%);pointer-events:none}
@@ -1445,8 +1438,7 @@
   .cstep-txt{display:flex;flex-direction:column;line-height:1.3}.cstep-txt strong{font-size:.85rem}.cstep-txt span{font-size:.74rem;opacity:.7}
 
   /* ===== FOOTER LANSKAP ===== */
-  /* selector footer.kf sengaja lebih spesifik agar menimpa aturan `footer` lama */
-  footer.kf{position:relative;display:block;overflow:hidden;opacity:1;text-align:left;background:var(--red);color:var(--cream);padding:4.2rem 0 0;font-size:inherit;gap:0}
+  footer.kf{position:relative;overflow:hidden;text-align:left;background:var(--red);color:var(--cream);padding:4.2rem 0 0}
   footer.kf::before{content:'';position:absolute;inset:0;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .5 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");opacity:.12;mix-blend-mode:multiply;pointer-events:none}
   footer.kf::after{content:'';position:absolute;inset:0 0 auto 0;height:1px;background:rgba(251,243,234,.18)}
 
