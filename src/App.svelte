@@ -656,7 +656,7 @@
 
                   <!-- Art — only visible when active -->
                   <div class="cart">
-                    <div class="stage cstage"><div class="scene" style="--base:{p.tilt*.3}deg">{@render art(p.id)}</div></div>
+                    <div class="cstage"><div class="scene" style="--base:{p.tilt*.3}deg">{@render art(p.id)}</div></div>
                   </div>
 
                   <p class="cdesc">{p.desc}</p>
