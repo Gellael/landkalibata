@@ -554,7 +554,6 @@
       </svg>
     </div>
     <div class="hero-inner" bind:this={heroInner}>
-      <p class="tag"><span class="tdot"></span> Since 2026</p>
       <h1><span style="--d:0">Where ideas</span><span style="--d:1">become</span><span style="--d:2">projects.</span></h1>
       <p class="hero-sub">Mengubah ide menjadi produk digital yang bisa langsung dipakai.</p>
       <div class="hero-btns">
