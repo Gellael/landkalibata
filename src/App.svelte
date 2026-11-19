@@ -144,6 +144,17 @@
     return o;
   }
 
+  // gambar di-cache supaya tidak diunduh & didekode berulang kali
+  const IMG_CACHE = new Map<string, Promise<HTMLImageElement>>();
+  const getImg = (u: string) => {
+    let p = IMG_CACHE.get(u);
+    if (!p) {
+      p = new Promise<HTMLImageElement>((res, rej) => { const im = new Image(); im.crossOrigin = 'anonymous'; im.onload = () => res(im); im.onerror = rej; im.src = u; });
+      IMG_CACHE.set(u, p);
+    }
+    return p;
+  };
+
   // Action: gambar siluet potret ber-dither. Kalau ada foto, foto itu yang di-dither.
   function dither(node: HTMLElement, opts: DitherOpts) {
     const canvas = document.createElement('canvas');
@@ -156,11 +167,13 @@
     let pulse = reduce ? 0 : 1, px = .5, py = .38, tx = .5, ty = .38;
     let visible = true, raf = 0, last = 0;
 
+    let tok = 0;
     const loadPhoto = () => {
       src = null;
       if (!o.photo) return;
-      const im = new Image(); im.crossOrigin = 'anonymous';
-      im.onload = () => {
+      const my = ++tok;
+      getImg(o.photo).then(im => {
+        if (my !== tok) return;
         try {
           const oc = document.createElement('canvas'); oc.width = w; oc.height = h;
           const c2 = oc.getContext('2d')!;
@@ -178,8 +191,7 @@
           src = a;
         } catch { src = null; }
         if (reduce) draw(performance.now());
-      };
-      im.src = o.photo;
+      }).catch(() => { src = null; });
     };
 
     const size = () => {
@@ -197,13 +209,14 @@
       pulse *= .94;
       px += (tx - px) * .12; py += (ty - py) * .12;
       for (let i = 0; i < 3; i++) cl[i] += (to[i] - cl[i]) * .12;
-      const gx = (px - .5) * a;
+      const gx = (px - .5) * a, sw = (t * .22) % 1.5 - .25, R2 = .2;
       for (let y = 0; y < h; y++) {
-        const Y = y / h;
+        const Y = y / h, dy = (Y - py) * (Y - py), near = dy < R2, by = (y & 7) << 3;
+        const sweep = src ? .16 * Math.exp(-Math.pow((Y - sw) * 9, 2)) : 0; // hanya bergantung pada baris
         for (let x = 0; x < w; x++) {
           const X = (x / w - .5) * a;
           let L: number;
-          if (src) { const sw = (t * .22) % 1.5 - .25; L = (src[y * w + x] ?? 0) + .16 * Math.exp(-Math.pow((Y - sw) * 9, 2)); }
+          if (src) L = (src[y * w + x] ?? 0) + sweep;
           else {
             const head = Math.hypot(X, Y - .42) - .17;
             const body = (Math.hypot(X / .42, (Y - 1.05) / .36) - 1) * .36;
@@ -211,10 +224,9 @@
             const pl = .5 + .5 * Math.sin(X * 7 + t * .7 + Math.sin(Y * 5 - t * .5) * 1.4) * Math.cos(Y * 6 - t * .4 + X * 2);
             L = m * ((.62 - Y * .22) + .18 * pl) + (1 - m) * (.08 + .3 * pl * pl);
           }
-          const gd = (X - gx) * (X - gx) + (Y - py) * (Y - py);
-          L += .55 * Math.exp(-gd * 26);
-          const B = BAYER[((y & 7) << 3) | (x & 7)];
-          const wipe = pulse > .01 ? pulse * (.3 + .7 * BAYER[((y & 7) << 3) | ((x * 5 + y * 3) & 7)]) : 0;
+          if (near) { const gd = (X - gx) * (X - gx) + dy; if (gd < R2) L += .55 * Math.exp(-gd * 26); }
+          const B = BAYER[by | (x & 7)];
+          const wipe = pulse > .01 ? pulse * (.3 + .7 * BAYER[by | ((x * 5 + y * 3) & 7)]) : 0;
           const c = L + (B - .5) * .9 - wipe > .5 ? cl : DARK;
           const p = (y * w + x) * 4;
           d[p] = c[0]; d[p + 1] = c[1]; d[p + 2] = c[2]; d[p + 3] = 255;
@@ -225,7 +237,7 @@
 
     const loop = (now: number) => {
       raf = requestAnimationFrame(loop);
-      if (!visible || now - last < 33) return;
+      if (!visible || now - last < (lite ? 66 : 33) || (teamModalOpen && node.classList.contains('stage-screen'))) return;
       last = now; draw(now);
     };
 
@@ -352,6 +364,24 @@
 
   const noMo = () => matchMedia('(prefers-reduced-motion:reduce)').matches;
 
+  // === MODE HEMAT: otomatis aktif di perangkat lemah (tes manual: ?lite=1 atau ?lite=0) ===
+  const isBrowser = typeof document !== 'undefined';
+  const nvg: any = isBrowser ? navigator : {};
+  const liteQ = isBrowser ? new URLSearchParams(location.search).get('lite') : null;
+  const liteAuto = liteQ === null;
+  let lite = liteQ === '1' || (liteAuto && (!!nvg.connection?.saveData || (nvg.hardwareConcurrency ?? 8) <= 4 || (nvg.deviceMemory ?? 8) <= 4));
+  if (isBrowser) { const c = document.documentElement.classList; c.add('is-loading'); if (lite) c.add('lite'); }
+  function enableLite() { if (lite) return; lite = true; document.documentElement.classList.add('lite'); }
+
+  let loading = true, leaving = false, pct = 0, heroOff = false;
+
+  // jeda animasi CSS saat elemen berada di luar layar
+  function vis(node: HTMLElement) {
+    const io = new IntersectionObserver(es => node.classList.toggle('is-off', !es[0].isIntersecting), { rootMargin: '120px' });
+    io.observe(node);
+    return { destroy() { io.disconnect(); } };
+  }
+
   function mkPart() { particles = Array.from({length:12},()=>({x:Math.random()*100,y:Math.random()*100,s:Math.random()*3+1.5,sp:Math.random()*25+18,o:Math.random()*0.14+0.04,d:Math.random()*-20})); }
 
   // bentuk panel yang berubah-ubah (kelipatan --u, supaya ikut mengecil di HP)
@@ -370,7 +400,7 @@
   const GLOW = ['#ffd36b', '#ff6b35', '#f59e0b'].map(hex2rgb);
   const SHP = [[1, 1, 1, 1], [3, 1, 3, 1], [1, 3, 1, 3]];
   const RAD = [[.92,.74,.95,.7,.9,.76,.98,.72], [.78,.96,.72,.94,.8,.98,.74,.92], [.95,.82,.7,.93,.88,.72,.96,.8]];
-  let mp = 0, mpT = 0, mpDirty = true, lastTrack: HTMLElement | null = null, vtOn = false;
+  let mp = 0, mpT = 0, mpDirty = true, lastTrack: HTMLElement | null = null, vtOn = false; let bt = 0;
 
   // interpolasi antar proyek, tiap proyek "menahan" bentuknya sebentar (smoothstep)
   function mix(arr: number[][], p: number) {
@@ -399,19 +429,20 @@
     pn.style.borderRadius = mix(SHP, mp).map(v => `calc(var(--u) * ${v.toFixed(2)})`).join(' ');
     pn.style.setProperty('--mp', mp.toFixed(3));
     const rr = mix(RAD, mp);
-    pn.querySelectorAll('.mblob path').forEach((el, j) => el.setAttribute('d', blobPath(rr.map((_, q) => rr[(q + j * 3) % rr.length] * (1 - j * .2)))));
+    if (!lite && (bt++ & 1) === 0) pn.querySelectorAll('.mblob path').forEach((el, j) => el.setAttribute('d', blobPath(rr.map((_, q) => rr[(q + j * 3) % rr.length] * (1 - j * .2)))));
     pn.style.setProperty('--ac', mix(GLOW, mp).map(Math.round).join(' '));
     pn.querySelectorAll<HTMLElement>('.mslide').forEach((el, i) => {
       const d = i - mp, a = Math.min(1, Math.abs(d)), c = (v: number) => Math.min(1, Math.max(0, v)).toFixed(3);
       el.style.setProperty('--d', d.toFixed(3)); el.style.setProperty('--a', a.toFixed(3));
       el.style.setProperty('--a2', (a * a).toFixed(3)); el.style.setProperty('--e', (d * Math.abs(d)).toFixed(3));
       el.style.setProperty('--oc', c(1 - (a - .08) / .3)); el.style.setProperty('--oa', c(1 - (a - .1) / .65));
+      el.style.visibility = a > .85 ? 'hidden' : '';
     });
     trackEl.querySelectorAll<HTMLElement>('.mtick').forEach((el, i) => el.style.setProperty('--f', String(Math.min(1, Math.max(0, mp - i + 1)))));
   }
 
   // View Transition: kartu panel benar-benar "berubah bentuk" jadi halaman detail (dan sebaliknya)
-  const canVT = () => !noMo() && !!(document as any).startViewTransition;
+  const canVT = () => !noMo() && !lite && !!(document as any).startViewTransition;
   function vt(fn: () => Promise<void>) {
     vtOn = true;
     const t = (document as any).startViewTransition(fn);
@@ -477,23 +508,25 @@
   // kartu miring mengikuti kursor + kilau cahaya (hanya perangkat dengan hover)
   function tilt(node:HTMLElement) {
     if(noMo()||!matchMedia('(hover:hover)').matches) return{destroy(){}};
-    const mv=(e:PointerEvent)=>{const r=node.getBoundingClientRect(),x=(e.clientX-r.left)/r.width,y=(e.clientY-r.top)/r.height;
+    let raf=0,ex=0,ey=0;
+    const apply=()=>{raf=0;const r=node.getBoundingClientRect(),x=(ex-r.left)/r.width,y=(ey-r.top)/r.height;
       node.style.setProperty('--gx',(x*100).toFixed(1)+'%');node.style.setProperty('--gy',(y*100).toFixed(1)+'%');
       node.style.setProperty('--rx',((.5-y)*9).toFixed(2)+'deg');node.style.setProperty('--ry',((x-.5)*11).toFixed(2)+'deg');};
-    const lv=()=>{node.style.setProperty('--rx','0deg');node.style.setProperty('--ry','0deg');};
+    const mv=(e:PointerEvent)=>{if(lite)return;ex=e.clientX;ey=e.clientY;if(!raf)raf=requestAnimationFrame(apply);};
+    const lv=()=>{cancelAnimationFrame(raf);raf=0;node.style.setProperty('--rx','0deg');node.style.setProperty('--ry','0deg');};
     node.addEventListener('pointermove',mv);node.addEventListener('pointerleave',lv);
-    return{destroy(){node.removeEventListener('pointermove',mv);node.removeEventListener('pointerleave',lv);}};
+    return{destroy(){cancelAnimationFrame(raf);node.removeEventListener('pointermove',mv);node.removeEventListener('pointerleave',lv);}};
   }
 
   function obs(node:HTMLElement) {
     if(noMo()){node.style.opacity='1';node.style.transform='none';return{destroy(){}};}
     const ease='cubic-bezier(.16,1,.3,1)';
-    node.style.opacity='0';node.style.transform='translateY(44px) scale(.97)';node.style.filter='blur(6px)';
-    node.style.transition=`opacity .8s ${ease},transform .8s ${ease},filter .8s ${ease}`;
+    node.style.opacity='0';node.style.transform='translateY(44px) scale(.97)';
+    node.style.transition=`opacity .8s ${ease},transform .8s ${ease}`;
     const io=new IntersectionObserver(es=>{es.forEach(e=>{if(e.isIntersecting){
       const d=parseFloat(node.dataset.delay||'0');
       setTimeout(()=>{
-        node.style.opacity='1';node.style.transform='translateY(0) scale(1)';node.style.filter='blur(0)';
+        node.style.opacity='1';node.style.transform='translateY(0) scale(1)';
         setTimeout(()=>{['transform','transition','filter'].forEach(k=>node.style.removeProperty(k));},900);
       },d);
       io.unobserve(node);
@@ -511,43 +544,98 @@
     return{destroy(){node.removeEventListener('pointermove',mv);node.removeEventListener('pointerleave',lv);}};
   }
 
+  // === LOADING SCREEN: tunggu font + gambar utama, singkat (maks ±3 dtk) ===
+  onMount(() => {
+    const reduce = noMo();
+    const MIN = reduce ? 150 : 1000, MAX = 3200;
+    const t0 = performance.now();
+    const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+    const tasks: Promise<unknown>[] = [];
+    let real = 0, shown = 0, raf = 0, stop = false;
+    const track = (p: Promise<unknown>) => { tasks.push(p.catch(() => {}).then(() => { real++; })); };
+    // jaring pengaman: loading tidak boleh menggantung selamanya
+    const failsafe = setTimeout(() => { loading = false; document.documentElement.classList.remove('is-loading'); }, 8000);
+
+    track((async () => {
+      const link = document.querySelector<HTMLLinkElement>('link[href*="fonts.googleapis.com"]');
+      if (link && !link.sheet) await new Promise<void>(r => { link.addEventListener('load', () => r(), { once: true }); link.addEventListener('error', () => r(), { once: true }); });
+      await Promise.all([document.fonts.load('1em Anton'), document.fonts.load('400 1em Archivo'), document.fonts.load('700 1em Archivo')]);
+    })());
+    track(document.readyState === 'complete' ? Promise.resolve() : new Promise<void>(r => addEventListener('load', () => r(), { once: true })));
+    track(new Promise<void>(r => { const i = new Image(); i.onload = () => r(); i.onerror = () => r(); i.src = '/logo.png'; }));
+    team.forEach(m => track(getImg(m.photo)));
+    const total = tasks.length;
+
+    const step = () => {
+      if (stop) return;
+      const el = performance.now() - t0;
+      const goal = el > MAX ? 1 : Math.min(real / total, el / MIN, .99);
+      shown += (goal - shown) * .16;
+      const p = Math.round(shown * 100);
+      if (p !== pct) pct = p;
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+
+    (async () => {
+      await Promise.race([Promise.all(tasks), sleep(MAX)]);
+      const wait = MIN - (performance.now() - t0);
+      if (wait > 0) await sleep(wait);
+      stop = true; cancelAnimationFrame(raf); pct = 100;
+      await sleep(reduce ? 0 : 320);
+      leaving = true;
+      document.documentElement.classList.remove('is-loading');
+      await sleep(reduce ? 0 : 1000);
+      loading = false;
+      clearTimeout(failsafe);
+    })();
+    return () => { stop = true; cancelAnimationFrame(raf); clearTimeout(failsafe); };
+  });
+
   onMount(()=>{
     mkPart();
-    const onScroll=()=>{navScrolled=scrollY>50;showTop=scrollY>700;syncMorph();};
+    const onScroll=()=>{navScrolled=scrollY>50;showTop=scrollY>700;heroOff=scrollY>innerHeight*1.3;syncMorph();};
     addEventListener('scroll',onScroll,{passive:true});
     addEventListener('resize',syncMorph,{passive:true});
     syncMorph();
     if(noMo()) return()=>{removeEventListener('scroll',onScroll);removeEventListener('resize',syncMorph);};
     const clamp=(v:number,a=0,b=1)=>Math.min(b,Math.max(a,v));
-    const doc=document.documentElement;let vh=innerHeight;
+    const doc=document.documentElement;let vh=innerHeight,docH=doc.scrollHeight;
     const hov=matchMedia('(hover:hover)').matches;
     const m={nx:0,ny:0,sx:0,sy:0};
-    const onR=()=>{vh=innerHeight;};
+    const onR=()=>{vh=innerHeight;docH=doc.scrollHeight;};
     const onP=(e:PointerEvent)=>{m.nx=(e.clientX/innerWidth)*2-1;m.ny=(e.clientY/innerHeight)*2-1;};
+    // tinggi dokumen di-cache (tidak dibaca tiap frame) supaya tidak memicu layout paksa
+    const ro=new ResizeObserver(()=>{docH=doc.scrollHeight;});ro.observe(document.body);
     addEventListener('resize',onR,{passive:true});
     if(hov) addEventListener('pointermove',onP,{passive:true});
-    let raf=0,last=performance.now(),lastY=scrollY,vel=0;
+    let raf=0,last=performance.now(),lastY=scrollY,vel=0,lastBar='',lastBs='',lastG='',tk=0,fN=0,fSum=0;
     const frame=(now:number)=>{
-      const dt=Math.min(now-last,64);last=now;const k=1-Math.exp(-dt/120);
-      const y=scrollY,pr=clamp(y/vh);
-      morphTick(1-Math.exp(-dt/150));
-      if(bar)bar.style.transform=`scaleX(${clamp(y/Math.max(1,doc.scrollHeight-vh))})`;
-      if(heroInner)heroInner.style.setProperty('--p',pr.toFixed(3));
-      // parallax hero: teks naik & memudar, orb bergerak lebih lambat
-      if(heroInner&&y<vh*1.2){heroInner.style.transform=`translate3d(0,${pr*60}px,0) scale(${1-pr*.07})`;heroInner.style.opacity=String(Math.max(0,1-pr*1.2));}
-      if(heroBg&&y<vh*1.2)heroBg.style.transform=`translate3d(0,${y*.22}px,0)`;
-      // pita berjalan miring mengikuti kecepatan scroll
-      vel+=(clamp((y-lastY)*.3,-7,7)-vel)*k;lastY=y;
-      if(projEl)projEl.style.setProperty('--v',vel.toFixed(2));
-      if(bandEl)bandEl.style.transform=`rotate(-2deg) skewX(${(-vel).toFixed(2)}deg)`;
-      if(!hov){m.nx=Math.sin(now/2600)*.7;m.ny=Math.cos(now/3100)*.5;}
-      m.sx+=(m.nx-m.sx)*k;m.sy+=(m.ny-m.sy)*k;
-      if(heroBg){heroBg.style.setProperty('--mx',(50+m.sx*45).toFixed(1)+'%');heroBg.style.setProperty('--my',(45+m.sy*45).toFixed(1)+'%');}
-      if(detailScene&&cur){const sw=Math.sin(now/2200)*5;detailScene.style.transform=`rotateX(${cur.tilt*.25-(hov?m.sy*5:0)}deg) rotateY(${hov?m.sx*14:sw}deg)`;}
       raf=requestAnimationFrame(frame);
+      const raw=now-last,dt=Math.min(raw,64);last=now;const k=1-Math.exp(-dt/120);
+      // ukur FPS sebentar setelah loading; kalau berat, otomatis pakai mode hemat
+      if(liteAuto&&!lite&&!loading&&fN<100&&raw<250){fN++;if(fN>10)fSum+=raw;if(fN===100&&fSum/90>26)enableLite();}
+      const y=scrollY,pr=clamp(y/vh);
+      if(!lite||(++tk&1)===0)morphTick(1-Math.exp(-(lite?dt*2:dt)/150));
+      const bw=clamp(y/Math.max(1,docH-vh)).toFixed(4);
+      if(bar&&bw!==lastBar){lastBar=bw;bar.style.transform=`scaleX(${bw})`;}
+      // pita berjalan miring mengikuti kecepatan scroll (hanya tulis kalau berubah)
+      vel+=(clamp((y-lastY)*.3,-7,7)-vel)*k;lastY=y;
+      const bs=(-vel).toFixed(2);
+      if(bandEl&&bs!==lastBs){lastBs=bs;bandEl.style.transform=`rotate(-2deg) skewX(${bs}deg)`;}
+      if(hov){m.sx+=(m.nx-m.sx)*k;m.sy+=(m.ny-m.sy)*k;}
+      // parallax hero hanya saat hero masih terlihat
+      if(y<vh*1.2){
+        if(heroInner){heroInner.style.setProperty('--p',pr.toFixed(3));heroInner.style.transform=`translate3d(0,${pr*60}px,0) scale(${1-pr*.07})`;heroInner.style.opacity=String(Math.max(0,1-pr*1.2));}
+        if(heroBg){
+          heroBg.style.transform=`translate3d(0,${y*.22}px,0)`;
+          if(hov){const g=(.5+m.sx*.45).toFixed(3)+','+(.45+m.sy*.45).toFixed(3);if(g!==lastG){lastG=g;heroBg.style.setProperty('--mx',(.5+m.sx*.45).toFixed(3));heroBg.style.setProperty('--my',(.45+m.sy*.45).toFixed(3));}}
+        }
+      }
+      if(detailScene&&cur){const sw=Math.sin(now/2200)*5;detailScene.style.transform=`rotateX(${cur.tilt*.25-(hov?m.sy*5:0)}deg) rotateY(${hov?m.sx*14:sw}deg)`;}
     };
     raf=requestAnimationFrame(frame);
-    return()=>{cancelAnimationFrame(raf);removeEventListener('resize',syncMorph);removeEventListener('resize',onR);removeEventListener('pointermove',onP);removeEventListener('scroll',onScroll);};
+    return()=>{cancelAnimationFrame(raf);ro.disconnect();removeEventListener('resize',syncMorph);removeEventListener('resize',onR);removeEventListener('pointermove',onP);removeEventListener('scroll',onScroll);};
   });
 
   // === MINIGAME FOOTER: kuda melompati rintangan ===
@@ -757,8 +845,24 @@
 
 <svelte:window on:keydown={onModalKeydown} />
 
-<div class="particles" aria-hidden="true">{#each particles as p}<div class="particle" style="left:{p.x}%;top:{p.y}%;width:{p.s}px;height:{p.s}px;opacity:{p.o};--sp:{p.sp}s;--dl:{p.d}s"></div>{/each}</div>
+<div class="particles" class:off={heroOff} aria-hidden="true">{#each particles as p}<div class="particle" style="left:{p.x}%;top:{p.y}%;width:{p.s}px;height:{p.s}px;opacity:{p.o};--sp:{p.sp}s;--dl:{p.d}s"></div>{/each}</div>
 <div class="progress" bind:this={bar} aria-hidden="true"></div>
+
+{#if loading}
+  <div class="ldr" class:out={leaving} role="status" aria-live="polite" aria-label="Memuat Kalibata Project" style="--p:{pct / 100}">
+    <div class="ldr-rings" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div class="ldr-core">
+      <div class="ldr-logo" aria-hidden="true">
+        <svg class="ldr-spin" viewBox="0 0 100 100"><circle class="trk" cx="50" cy="50" r="46"/><circle class="arc" cx="50" cy="50" r="46"/></svg>
+        <img src="/logo.png" alt="" />
+      </div>
+      <p class="ldr-name" aria-hidden="true">{#each [...'KALIBATA'] as ch, i}<span style="--i:{i}">{ch}</span>{/each}</p>
+      <span class="label ldr-tag" aria-hidden="true">Project</span>
+      <div class="ldr-bar" aria-hidden="true"><i></i></div>
+      <p class="ldr-pct" aria-hidden="true">{pct}%</p>
+    </div>
+  </div>
+{/if}
 
 <header class="nav" class:scrolled={navScrolled}>
   <a class="brand" href="#top"><img src="/logo.png" alt="Kalibata Project" class="brand-logo"/><span class="brand-text">Kalibata<br/>Project</span></a>
@@ -775,7 +879,7 @@
 
 <main id="top">
   <!-- HERO -->
-  <section class="hero">
+  <section class="hero" class:paused={heroOff}>
     <div class="hero-bg" aria-hidden="true" bind:this={heroBg}><div class="orb o1"></div><div class="orb o2"></div>
       <svg class="topo" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid slice"><defs><path id="cl" vector-effect="non-scaling-stroke" d="M0-90c50-12 105 14 115 62s-30 90-90 105-140-8-150-62 40-93 125-105z"/></defs>
         <g transform="translate(650 170)"><g class="contour">{#each [.45,.8,1.15,1.55,2,2.5] as k}<use href="#cl" transform="scale({k})"/>{/each}</g></g>
@@ -793,7 +897,7 @@
     <div class="scroll-h" aria-hidden="true"><div class="smouse"><div class="swheel"></div></div></div>
   </section>
 
-  <div class="band-wrap" aria-hidden="true"><div class="band" bind:this={bandEl}><div class="band-t">{#each [0,1] as _}<div class="grp">{#each [0,1,2] as _}<span>{bandText}</span>{/each}</div>{/each}</div></div></div>
+  <div class="band-wrap" use:vis aria-hidden="true"><div class="band" bind:this={bandEl}><div class="band-t">{#each [0,1] as _}<div class="grp">{#each [0,1,2] as _}<span>{bandText}</span>{/each}</div>{/each}</div></div></div>
 
   <!-- ===== ABOUT / PORTFOLIO ===== -->
   <section id="about" class="about">
@@ -847,7 +951,7 @@
 
       {#if mode === 'browse'}
         <!-- Trek scroll: panel menempel (sticky), tiap langkah scroll mengubah panel jadi proyek berikutnya -->
-        <div class="mtrack" bind:this={trackEl} style="--n:{projects.length}">
+        <div class="mtrack" use:vis bind:this={trackEl} style="--n:{projects.length}">
           <div class="mstick">
             <div class="mtop">
               <span class="mcount"><b>0{activeIdx + 1}</b> / 0{projects.length}</span>
@@ -892,7 +996,7 @@
       {/if}
 
       {#if mode==='detail' && cur}
-        <div class="det-wrap" bind:this={detailEl}>
+        <div class="det-wrap" use:vis bind:this={detailEl}>
           {#key cur.id}
             <article class="det" style="background:{cur.bg};color:{cur.color};--bgc:{cur.bg};--fg:{cur.color}" in:rise>
               <span class="det-ghost" aria-hidden="true">{cur.name}</span>
@@ -1102,7 +1206,7 @@
   </div>
 
   <!-- Lanskap bergaya ukiran: bukit berarsir, dataran krem, penunggang kuda -->
-  <div class="kf-game" use:kfGame role="button" tabindex="0" aria-label="Minigame: lompatkan kuda melewati rintangan. Ketuk atau tekan Spasi.">
+  <div class="kf-game" use:kfGame use:vis role="button" tabindex="0" aria-label="Minigame: lompatkan kuda melewati rintangan. Ketuk atau tekan Spasi.">
   <svg class="kf-land" viewBox="0 0 1440 360" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
     <defs>
       <pattern id="kf-h1" width="8" height="5" patternUnits="userSpaceOnUse"><path d="M0 2.5h8" stroke="#fbf3ea" stroke-width="1.1" opacity=".55"/></pattern>
@@ -1172,8 +1276,8 @@
   .btn.ghost{background:0;color:inherit;box-shadow:inset 0 0 0 2px currentColor}.btn.hg{color:var(--cream)}
   @media(hover:hover){.btn:hover{transform:translateY(-2px);box-shadow:0 0 24px rgba(251,243,234,.15),0 6px 20px rgba(0,0,0,.12)}}
 
-  .nav{position:fixed;inset:0 0 auto 0;z-index:15;display:flex;justify-content:space-between;align-items:center;padding:.75rem var(--pad);transition:all .4s cubic-bezier(.16,1,.3,1)}
-  .nav.scrolled{background:rgba(126,15,20,.92);backdrop-filter:blur(16px) saturate(1.4);-webkit-backdrop-filter:blur(16px) saturate(1.4);padding-block:.45rem;box-shadow:0 2px 16px rgba(0,0,0,.1)}
+  .nav{position:fixed;inset:0 0 auto 0;z-index:15;display:flex;justify-content:space-between;align-items:center;padding:.75rem var(--pad);transition:background-color .4s,padding .4s,box-shadow .4s}
+  .nav.scrolled{background:rgba(126,15,20,.97);padding-block:.45rem;box-shadow:0 2px 16px rgba(0,0,0,.1)}
   .brand{display:flex;align-items:center;gap:.45rem}.brand-logo{width:32px;height:32px;border-radius:7px;object-fit:cover;transition:all .3s}
   .nav.scrolled .brand-logo{width:24px;height:24px}.brand-text{font-size:.85rem;line-height:1;text-transform:uppercase;letter-spacing:.02em}
   nav{display:flex;align-items:center;gap:.8rem;font-weight:600;font-size:.82rem}
@@ -1183,10 +1287,10 @@
   @media(hover:hover){.nav-btn:hover{background:var(--cream);color:var(--maroon)}}
 
   .hero{position:relative;min-height:100svh;display:flex;align-items:center;justify-content:center;padding:5rem var(--pad) 3rem;overflow:hidden;text-align:center}
-  .hero::before{content:'';position:absolute;inset:0;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .5 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");opacity:.12;mix-blend-mode:multiply;pointer-events:none;z-index:1}
+  .hero::before{content:'';position:absolute;inset:0;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .5 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");opacity:.12;pointer-events:none;z-index:1}
   .hero-bg{position:absolute;inset:0;overflow:hidden;z-index:0}
-  .orb{position:absolute;border-radius:50%;filter:blur(90px);opacity:.25;animation:ob 24s ease-in-out infinite}
-  .o1{width:40vw;max-width:400px;aspect-ratio:1;background:#ff6b35;top:-8%;right:-5%}.o2{width:34vw;max-width:340px;aspect-ratio:1;background:#7e0f14;bottom:-6%;left:-4%;animation-delay:-10s}
+  .orb{position:absolute;border-radius:50%;opacity:.4;animation:ob 24s ease-in-out infinite}
+  .o1{width:56vw;max-width:560px;aspect-ratio:1;background:radial-gradient(closest-side,#ff6b35,transparent);top:-16%;right:-14%}.o2{width:48vw;max-width:480px;aspect-ratio:1;background:radial-gradient(closest-side,#7e0f14,transparent);bottom:-14%;left:-12%;animation-delay:-10s}
   @keyframes ob{0%,100%{transform:translate(0,0) scale(1)}33%{transform:translate(18px,-28px) scale(1.03)}66%{transform:translate(-10px,10px) scale(.97)}}
   .hero-inner{position:relative;z-index:2;max-width:640px}
   h1{margin:0;text-transform:uppercase;font-size:clamp(2.4rem,11vw,7rem);line-height:.87;letter-spacing:-.02em;perspective:900px}
@@ -1238,7 +1342,7 @@
   .mcount{opacity:.7}.mcount b{font-family:'Anton',sans-serif;font-weight:400;font-size:1.5rem;letter-spacing:.02em}
   .mhint{opacity:.4}
 
-  .mpanel{position:relative;flex:1 1 auto;min-height:0;max-height:680px;overflow:hidden;isolation:isolate;box-shadow:0 24px 60px rgba(0,0,0,.16);view-transition-name:pcard;will-change:border-radius,background-color}
+  .mpanel{position:relative;flex:1 1 auto;min-height:0;max-height:680px;overflow:hidden;isolation:isolate;box-shadow:0 24px 60px rgba(0,0,0,.16);view-transition-name:pcard}
   .mglow{position:absolute;inset:0;z-index:0;pointer-events:none;background:radial-gradient(circle at var(--gx,30%) var(--gy,20%),rgba(255,255,255,.2),transparent 60%)}
 
   .mslide{position:absolute;inset:0;z-index:1;display:grid;grid-template-columns:1.05fr 1fr;grid-template-rows:minmax(0,1fr);align-items:stretch;gap:clamp(1rem,3vw,3rem);padding:clamp(1.5rem,4vw,3rem) clamp(2.2rem,7vw,5.5rem);pointer-events:none}
@@ -1327,7 +1431,8 @@
   h1 span:nth-child(even){translate:calc(var(--p,0)*9vw) 0}
 
   /* ===== FX ===== */
-  .hero-bg::after{content:'';position:absolute;inset:0;background:radial-gradient(520px circle at var(--mx,50%) var(--my,40%),rgba(255,214,170,.28),transparent 65%);pointer-events:none}
+  .hero-bg::after{content:'';position:absolute;left:-350px;top:-350px;width:700px;height:700px;background:radial-gradient(closest-side,rgba(255,214,170,.28),transparent);translate:calc(var(--mx,.5) * 100vw) calc(var(--my,.45) * 100svh);will-change:transform,translate;pointer-events:none;animation:gdrift 16s ease-in-out infinite alternate}
+  @keyframes gdrift{from{transform:translate3d(-6vw,-3svh,0)}to{transform:translate3d(6vw,4svh,0)}}
   .topo{position:absolute;inset:0;width:100%;height:100%;fill:none;stroke:var(--cream);stroke-width:1.2;opacity:.2}
   .contour{transform-box:fill-box;transform-origin:center;animation:cspin 90s linear infinite}.contour.c2{animation-duration:120s;animation-direction:reverse}
   @keyframes cspin{to{transform:rotate(360deg)}}
@@ -1467,7 +1572,7 @@
 
   /* ===== FOOTER LANSKAP ===== */
   footer.kf{position:relative;overflow:hidden;text-align:left;background:var(--red);color:var(--cream);padding:4.2rem 0 0}
-  footer.kf::before{content:'';position:absolute;inset:0;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .5 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");opacity:.12;mix-blend-mode:multiply;pointer-events:none}
+  footer.kf::before{content:'';position:absolute;inset:0;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .5 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");opacity:.12;pointer-events:none}
   footer.kf::after{content:'';position:absolute;inset:0 0 auto 0;height:1px;background:rgba(251,243,234,.18)}
 
   .kf-main{position:relative;z-index:1;display:grid;grid-template-columns:1fr;gap:2rem 2.5rem;padding-bottom:2.2rem}
@@ -1579,7 +1684,7 @@
   /* ===== DETAIL: lebih pas ===== */
   .det-wrap{scroll-margin-top:4.5rem}
   .det{overflow:clip}
-  .det-top{position:sticky;top:3.2rem;z-index:3;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);background:color-mix(in srgb,var(--bgc) 82%,transparent)}
+  .det-top{position:sticky;top:3.2rem;z-index:3;background:color-mix(in srgb,var(--bgc) 95%,transparent)}
   .det-body{align-items:start;gap:clamp(1rem,3vw,3rem)}
   .det-copy{gap:.6rem}
   .det h3{font-size:clamp(2.6rem,9vw,6.5rem)}
@@ -1619,4 +1724,46 @@
   .csteps{grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));gap:.7rem}
   .cstep{padding:.7rem;border-radius:.9rem;background:rgba(255,255,255,.1)}
   @media(max-width:899px){.det-body{min-height:0;padding-block:1rem}}
+  /* ===== PERFORMA ===== */
+  .mcopy,.mart,.mdeco i{will-change:transform,opacity}
+  .mslide:not(.on) :global(*){animation-play-state:paused!important}
+  :global(.is-off),:global(.is-off *){animation-play-state:paused!important}
+  .hero.paused :global(*){animation-play-state:paused!important}
+  .particles.off{display:none}
+
+  /* ===== MODE HEMAT (perangkat lemah): buang efek dekoratif yang berat ===== */
+  :global(html.lite) .particles,:global(html.lite) .orb,:global(html.lite) .mblob,:global(html.lite) .mdeco,:global(html.lite) .mghost,:global(html.lite) .det-ghost{display:none}
+  :global(html.lite) .hero-bg::after,:global(html.lite) .contour,:global(html.lite) .route,:global(html.lite) .wave,:global(html.lite) .ring,:global(html.lite) .badge.paid,:global(html.lite) .cstep-ico,:global(html.lite) .det-art::before{animation:none}
+  :global(html.lite) h1 span:last-child{animation:fp 1s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(var(--d)*130ms)}
+  :global(html.lite) .layer.lift{filter:none}
+  :global(html.lite) .mpanel,:global(html.lite) .stage{box-shadow:0 10px 24px rgba(0,0,0,.18)}
+
+  /* ===== LOADING SCREEN ===== */
+  :global(html.is-loading){overflow:hidden}
+  :global(html.is-loading :is(main,header,footer,.particles) *){animation-play-state:paused!important}
+  .ldr{position:fixed;inset:0;z-index:100;display:grid;place-items:center;background:var(--red);color:var(--cream);will-change:transform}
+  .ldr::before{content:'';position:absolute;inset:0;background:radial-gradient(60% 50% at 85% 5%,rgba(255,255,255,.16),transparent 70%),radial-gradient(60% 50% at 8% 100%,rgba(126,15,20,.5),transparent 70%)}
+  .ldr::after{content:'';position:absolute;left:0;right:0;top:100%;height:9vh;background:var(--red);border-radius:0 0 50% 50%/0 0 100% 100%}
+  .ldr.out{transform:translate3d(0,calc(-100% - 9vh),0);transition:transform .85s cubic-bezier(.76,0,.24,1) .12s}
+  .ldr.out .ldr-core{opacity:0;transform:scale(.9) translateY(-12px);transition:opacity .3s ease,transform .45s cubic-bezier(.5,0,.75,0)}
+  .ldr-rings{position:absolute;left:50%;top:50%;width:0;height:0;pointer-events:none}
+  .ldr-rings i{position:absolute;left:-30vmin;top:-30vmin;width:60vmin;height:60vmin;border-radius:50%;border:1.5px solid rgba(251,243,234,.4);opacity:0;animation:ldrRing 2.6s cubic-bezier(.2,.6,.3,1) infinite}
+  .ldr-rings i:nth-child(2){animation-delay:.85s}.ldr-rings i:nth-child(3){animation-delay:1.7s}
+  @keyframes ldrRing{from{transform:scale(.25);opacity:.9}to{transform:scale(1.6);opacity:0}}
+  .ldr-core{position:relative;display:grid;justify-items:center;gap:.9rem;padding:1rem;text-align:center}
+  .ldr-logo{position:relative;display:grid;place-items:center;width:88px;height:88px;animation:ldrPop .7s cubic-bezier(.34,1.4,.64,1) both}
+  .ldr-logo img{width:58px;height:58px;border-radius:14px;object-fit:cover}
+  .ldr-spin{position:absolute;inset:0;width:100%;height:100%;fill:none;stroke-width:3;stroke-linecap:round;animation:ldrSpin 1.1s linear infinite}
+  .ldr-spin .trk{stroke:rgba(251,243,234,.22)}.ldr-spin .arc{stroke:var(--cream);stroke-dasharray:80 210}
+  @keyframes ldrSpin{to{transform:rotate(360deg)}}
+  @keyframes ldrPop{from{transform:scale(.4);opacity:0}to{transform:none;opacity:1}}
+  .ldr-name{margin:.3rem 0 0;font-family:'Anton','Impact','Arial Narrow',sans-serif;font-size:clamp(2.6rem,13vw,5.5rem);line-height:.95;letter-spacing:.02em;text-transform:uppercase;overflow:hidden;padding-bottom:.06em}
+  .ldr-name span{display:inline-block;animation:ldrUp .75s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(var(--i) * 55ms + 180ms)}
+  @keyframes ldrUp{from{transform:translateY(110%) rotate(6deg)}to{transform:none}}
+  .ldr-tag{background:var(--cream);color:var(--maroon);margin:0;animation:ldrFade .6s .65s both}
+  @keyframes ldrFade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  .ldr-bar{width:min(62vw,260px);height:4px;border-radius:4px;overflow:hidden;background:rgba(251,243,234,.25);margin-top:.5rem}
+  .ldr-bar i{display:block;height:100%;background:var(--cream);transform:scaleX(var(--p,0));transform-origin:left}
+  .ldr-pct{margin:0;font-size:.72rem;font-weight:800;letter-spacing:.14em;font-variant-numeric:tabular-nums;opacity:.85}
+  @media(prefers-reduced-motion:reduce){.ldr,.ldr *{animation:none!important;transition:none!important}}
 </style>
