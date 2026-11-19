@@ -365,6 +365,59 @@
     return trackEl.getBoundingClientRect().top + scrollY + (projects.length > 1 ? i / (projects.length - 1) : 0) * total;
   }
 
+  // === MORPH TERHUBUNG SCROLL (kontinu, bukan loncat per slide) ===
+  const BG_HEX = ['#1fbf6b', '#7e0f14', '#0b0906'].map(hex2rgb);
+  const GLOW = ['#ffd36b', '#ff6b35', '#f59e0b'].map(hex2rgb);
+  const SHP = [[1, 1, 1, 1], [3, 1, 3, 1], [1, 3, 1, 3]];
+  const RAD = [[.92,.74,.95,.7,.9,.76,.98,.72], [.78,.96,.72,.94,.8,.98,.74,.92], [.95,.82,.7,.93,.88,.72,.96,.8]];
+  let mp = 0, mpT = 0, mpDirty = true, lastTrack: HTMLElement | null = null, vtOn = false;
+
+  // interpolasi antar proyek, tiap proyek "menahan" bentuknya sebentar (smoothstep)
+  function mix(arr: number[][], p: number) {
+    const i = Math.max(0, Math.min(arr.length - 2, Math.floor(p))), f = Math.min(1, Math.max(0, p - i)), t = f * f * (3 - 2 * f);
+    return arr[i].map((v, j) => v + (arr[i + 1][j] - v) * t);
+  }
+  // titik radius -> path kurva tertutup mulus (Catmull-Rom ke bezier)
+  function blobPath(r: number[]) {
+    const n = r.length, P = r.map((v, j) => { const a = (j / n) * Math.PI * 2; return [Math.cos(a) * v * 100, Math.sin(a) * v * 100]; });
+    const f = (v: number) => v.toFixed(1);
+    let d = `M${f(P[0][0])} ${f(P[0][1])}`;
+    for (let j = 0; j < n; j++) {
+      const a = P[(j - 1 + n) % n], b = P[j], c = P[(j + 1) % n], e = P[(j + 2) % n];
+      d += `C${f(b[0] + (c[0] - a[0]) / 6)} ${f(b[1] + (c[1] - a[1]) / 6)} ${f(c[0] - (e[0] - b[0]) / 6)} ${f(c[1] - (e[1] - b[1]) / 6)} ${f(c[0])} ${f(c[1])}`;
+    }
+    return d + 'Z';
+  }
+  function morphTick(k: number) {
+    if (!trackEl) return;
+    const fresh = trackEl !== lastTrack;
+    if (!fresh && !mpDirty && Math.abs(mpT - mp) < .0008) return;
+    lastTrack = trackEl; mpDirty = false;
+    mp += (mpT - mp) * k; if (Math.abs(mpT - mp) < .0008) mp = mpT;
+    const pn = trackEl.querySelector<HTMLElement>('.mpanel'); if (!pn) return;
+    pn.style.backgroundColor = `rgb(${mix(BG_HEX, mp).map(Math.round)})`;
+    pn.style.borderRadius = mix(SHP, mp).map(v => `calc(var(--u) * ${v.toFixed(2)})`).join(' ');
+    pn.style.setProperty('--mp', mp.toFixed(3));
+    const rr = mix(RAD, mp);
+    pn.querySelectorAll('.mblob path').forEach((el, j) => el.setAttribute('d', blobPath(rr.map((_, q) => rr[(q + j * 3) % rr.length] * (1 - j * .2)))));
+    pn.style.setProperty('--ac', mix(GLOW, mp).map(Math.round).join(' '));
+    pn.querySelectorAll<HTMLElement>('.mslide').forEach((el, i) => {
+      const d = i - mp, a = Math.min(1, Math.abs(d)), c = (v: number) => Math.min(1, Math.max(0, v)).toFixed(3);
+      el.style.setProperty('--d', d.toFixed(3)); el.style.setProperty('--a', a.toFixed(3));
+      el.style.setProperty('--a2', (a * a).toFixed(3)); el.style.setProperty('--e', (d * Math.abs(d)).toFixed(3));
+      el.style.setProperty('--oc', c(1 - (a - .08) / .3)); el.style.setProperty('--oa', c(1 - (a - .1) / .65));
+    });
+    trackEl.querySelectorAll<HTMLElement>('.mtick').forEach((el, i) => el.style.setProperty('--f', String(Math.min(1, Math.max(0, mp - i + 1)))));
+  }
+
+  // View Transition: kartu panel benar-benar "berubah bentuk" jadi halaman detail (dan sebaliknya)
+  const canVT = () => !noMo() && !!(document as any).startViewTransition;
+  function vt(fn: () => Promise<void>) {
+    vtOn = true;
+    const t = (document as any).startViewTransition(fn);
+    return t.finished.catch(() => {}).finally(() => { vtOn = false; });
+  }
+
   function syncMorph() {
     if (!trackEl) return;
     const total = trackEl.offsetHeight - innerHeight;
@@ -372,27 +425,38 @@
     const p = Math.min(1, Math.max(0, -trackEl.getBoundingClientRect().top / total));
     const i = Math.round(p * (projects.length - 1));
     if (i !== activeIdx) activeIdx = i;
+    mpT = p * (projects.length - 1);
+    if (noMo()) { mp = mpT; mpDirty = true; morphTick(1); }
   }
 
   function goSlide(i: number) { scrollTo({ top: stepTop(i), behavior: noMo() ? 'instant' : 'smooth' }); }
 
-  async function openProject(id:string) {
-    openedId=id; mode='detail';
-    await svelteTick();
-    detailEl?.scrollIntoView({behavior:noMo()?'auto':'smooth',block:'start'});
+  async function openProject(id: string) {
+    const fast = canVT();
+    const run = async () => {
+      openedId = id; mode = 'detail';
+      await svelteTick();
+      detailEl?.scrollIntoView({ behavior: fast || noMo() ? 'instant' : 'smooth', block: 'start' } as ScrollIntoViewOptions);
+    };
+    if (fast) vt(run); else await run();
   }
 
   async function backToSlideshow() {
     const i = Math.max(0, projects.findIndex(p => p.id === openedId));
-    mode='browse'; openedId=null; activeIdx=i;
-    await svelteTick();
-    scrollTo({ top: stepTop(i), behavior: 'instant' });
+    const run = async () => {
+      mode = 'browse'; openedId = null; activeIdx = i; mp = mpT = i; mpDirty = true;
+      await svelteTick();
+      scrollTo({ top: stepTop(i), behavior: 'instant' });
+      syncMorph(); morphTick(1);
+    };
+    if (canVT()) vt(run); else await run();
   }
 
   $: cur = projects.find(p=>p.id===openedId)??null;
+  $: nxt = cur ? projects[(projects.findIndex(p=>p.id===cur.id)+1)%projects.length] : null;
 
   function rise(n:Element,{duration=700}={}) {
-    return {duration:noMo()?0:duration,easing:cubicOut,
+    return {duration:noMo()||vtOn?0:duration,easing:cubicOut,
       css:(t:number)=>`opacity:${t};transform:perspective(1200px) rotateX(${(1-t)*-14}deg) translateY(${(1-t)*60}px) scale(${.93+t*.07})`};
   }
 
@@ -466,6 +530,7 @@
     const frame=(now:number)=>{
       const dt=Math.min(now-last,64);last=now;const k=1-Math.exp(-dt/120);
       const y=scrollY,pr=clamp(y/vh);
+      morphTick(1-Math.exp(-dt/150));
       if(bar)bar.style.transform=`scaleX(${clamp(y/Math.max(1,doc.scrollHeight-vh))})`;
       if(heroInner)heroInner.style.setProperty('--p',pr.toFixed(3));
       // parallax hero: teks naik & memudar, orb bergerak lebih lambat
@@ -789,11 +854,14 @@
               <span class="mhint">Scroll ↓</span>
             </div>
 
-            <div class="mpanel" use:tilt style="background-color:{curP.bg};color:{curP.color};border-radius:{shapes[activeIdx % shapes.length]}">
+            <div class="mpanel" use:tilt style="background-color:#1fbf6b;border-radius:var(--u)">
               <div class="mglow"></div>
+              <svg class="mblob" viewBox="-110 -110 220 220" aria-hidden="true"><path class="b1"/><path class="b2"/><path class="b3"/></svg>
+              <div class="mdeco" aria-hidden="true"><i class="d1"></i><i class="d2"></i><i class="d3"></i></div>
               {#each projects as p, i (p.id)}
                 <div class="mslide" class:on={activeIdx === i} class:prev={i < activeIdx} class:next={i > activeIdx}
-                  inert={activeIdx !== i} aria-hidden={activeIdx !== i}>
+                  inert={activeIdx !== i} aria-hidden={activeIdx !== i} style="color:{p.color}">
+                  <span class="mghost" aria-hidden="true">{p.name}</span>
                   <div class="mcopy">
                     <span class="mnum" style="--k:0">0{i + 1}</span>
                     <span class="badge inl" class:paid={p.paid} style="--k:1">{#if p.paid}{@render icon('coin')}{/if}{p.price}</span>
@@ -826,7 +894,8 @@
       {#if mode==='detail' && cur}
         <div class="det-wrap" bind:this={detailEl}>
           {#key cur.id}
-            <article class="det" style="background:{cur.bg};color:{cur.color}" in:rise>
+            <article class="det" style="background:{cur.bg};color:{cur.color};--bgc:{cur.bg};--fg:{cur.color}" in:rise>
+              <span class="det-ghost" aria-hidden="true">{cur.name}</span>
               <div class="det-top">
                 <button class="back" on:click={backToSlideshow}>← Semua proyek</button>
               </div>
@@ -835,9 +904,16 @@
                   <span class="det-num">0{projects.findIndex(x=>x.id===cur.id)+1}</span>
                   <span class="badge inl" class:paid={cur.paid}>{#if cur.paid}{@render icon('coin')}{/if}{cur.price}</span>
                   <p class="det-kind">{cur.kind}</p>
-                  <h3>{cur.name}</h3>
+                  <h3 aria-label={cur.name}>{#each [...cur.name] as ch, ci}<span aria-hidden="true" style="--c:{ci}">{ch}</span>{/each}</h3>
                   <p class="det-desc">{cur.desc}</p>
-                  <ul>{#each cur.points as pt,j}<li style="--ld:{j}">{pt}</li>{/each}</ul>
+                  <div class="det-btns">
+                    <a class="btn" href={cur.url} target="_blank" rel="noopener noreferrer">{cur.cta} ↗</a>
+                    <button class="btn ghost" on:click={backToSlideshow}>Kembali</button>
+                  </div>
+                </div>
+                <div class="det-art"><div class="dstage"><div class="scene" bind:this={detailScene} style="--base:{cur.tilt}deg">{@render art(cur.id)}</div></div></div>
+              </div>
+              <div class="det-more"><p class="det-sub">Yang kamu dapat</p><ul>{#each cur.points as pt,j}<li style="--ld:{j}">{pt}</li>{/each}</ul>
                   {#if cur.paid}
                     <div class="cred">
                       <p class="cred-t">Cara kerja kredit</p>
@@ -851,13 +927,8 @@
                       </div>
                     </div>
                   {/if}
-                  <div class="det-btns">
-                    <a class="btn" href={cur.url} target="_blank" rel="noopener noreferrer">{cur.cta} ↗</a>
-                    <button class="btn ghost" on:click={backToSlideshow}>Kembali</button>
                   </div>
-                </div>
-                <div class="det-art"><div class="stage"><div class="scene" bind:this={detailScene} style="--base:{cur.tilt}deg">{@render art(cur.id)}</div></div></div>
-              </div>
+              {#if nxt}<button class="det-next" style="background:{nxt.bg};color:{nxt.color}" on:click={() => openProject(nxt.id)}><small>Proyek berikutnya</small><b>{nxt.name}</b><i aria-hidden="true">→</i></button>{/if}
             </article>
           {/key}
         </div>
@@ -1161,13 +1232,13 @@
   .proj-sub{margin:.4rem 0 0;font-size:clamp(.85rem,1.3vw,1rem);font-weight:600;opacity:.45}
 
   /* ===== PROYEK: PANEL MORPH SAAT SCROLL ===== */
-  .mtrack{--u:40px;position:relative;height:calc(100vh + (var(--n) - 1) * 85vh);height:calc(100svh + (var(--n) - 1) * 85svh)}
+  .mtrack{--u:40px;position:relative;height:calc(100vh + (var(--n) - 1) * 110vh);height:calc(100svh + (var(--n) - 1) * 110svh)}
   .mstick{position:sticky;top:0;height:100vh;height:100svh;display:flex;flex-direction:column;justify-content:center;gap:.9rem;padding:4.6rem 0 1.2rem}
   .mtop{display:flex;justify-content:space-between;align-items:center;font-size:.72rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}
   .mcount{opacity:.7}.mcount b{font-family:'Anton',sans-serif;font-weight:400;font-size:1.5rem;letter-spacing:.02em}
   .mhint{opacity:.4}
 
-  .mpanel{position:relative;flex:1 1 auto;min-height:0;max-height:680px;overflow:hidden;isolation:isolate;box-shadow:0 24px 60px rgba(0,0,0,.16);transition:background-color .9s cubic-bezier(.65,0,.35,1),color .9s cubic-bezier(.65,0,.35,1),border-radius 1.1s cubic-bezier(.65,0,.35,1)}
+  .mpanel{position:relative;flex:1 1 auto;min-height:0;max-height:680px;overflow:hidden;isolation:isolate;box-shadow:0 24px 60px rgba(0,0,0,.16);view-transition-name:pcard;will-change:border-radius,background-color}
   .mglow{position:absolute;inset:0;z-index:0;pointer-events:none;background:radial-gradient(circle at var(--gx,30%) var(--gy,20%),rgba(255,255,255,.2),transparent 60%)}
 
   .mslide{position:absolute;inset:0;z-index:1;display:grid;grid-template-columns:1.05fr 1fr;grid-template-rows:minmax(0,1fr);align-items:stretch;gap:clamp(1rem,3vw,3rem);padding:clamp(1.5rem,4vw,3rem) clamp(2.2rem,7vw,5.5rem);pointer-events:none}
@@ -1184,17 +1255,14 @@
   .mdesc{max-width:38ch;font-size:clamp(.88rem,1.3vw,1.05rem);font-weight:600;line-height:1.55;opacity:.8}
   .mbtns{display:flex;flex-wrap:wrap;gap:.55rem;margin-top:.5rem}
 
-  .mart{display:grid;place-items:center;min-height:0;min-width:0;container-type:size;transition:transform 1s cubic-bezier(.34,1.3,.64,1),opacity .5s ease}
-  .mslide.on .mart{transition-delay:.15s}
-  .mslide.prev .mart{opacity:0;transform:translateY(-10%) scale(.55) rotate(-14deg)}
-  .mslide.next .mart{opacity:0;transform:translateY(10%) scale(.55) rotate(14deg)}
+  .mart{display:grid;place-items:center;min-height:0;min-width:0;container-type:size}
   .mstage{position:relative;width:auto;height:min(100cqh,calc(100cqw * 300 / 360),360px);aspect-ratio:360/300;perspective:1100px}
 
   .mrail{display:flex;gap:.6rem}
   .mtick{all:unset;cursor:pointer;flex:1;display:flex;flex-direction:column;gap:.45rem;min-width:0;font-size:.68rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;opacity:.4;transition:opacity .3s}
   .mtick i{display:block;position:relative;overflow:hidden;height:3px;border-radius:3px;background:rgba(126,15,20,.15)}
-  .mtick i::after{content:'';position:absolute;inset:0;background:var(--maroon);transform:scaleX(0);transform-origin:left;transition:transform .7s cubic-bezier(.16,1,.3,1)}
-  .mtick.on{opacity:1}.mtick.on i::after,.mtick.done i::after{transform:scaleX(1)}
+  .mtick i::after{content:'';position:absolute;inset:0;background:var(--maroon);transform:scaleX(var(--f,0));transform-origin:left}
+  .mtick.on{opacity:1}
   .mtick:focus-visible{outline:3px solid var(--maroon);outline-offset:4px}
   @media(hover:hover){.mtick:hover{opacity:.85}}
 
@@ -1226,7 +1294,7 @@
 
   /* DETAIL */
   .det-wrap{scroll-margin-top:1rem;margin-top:1.5rem}
-  .det{border-radius:1.5rem;overflow:hidden;transform-origin:50% 0}
+  .det{position:relative;border-radius:1.5rem;overflow:hidden;transform-origin:50% 0;view-transition-name:pcard}
   .det-top{padding:.9rem clamp(1rem,3vw,2rem);border-bottom:1px solid rgba(255,255,255,.06)}
   .back{all:unset;cursor:pointer;display:inline-flex;align-items:center;gap:.3rem;font:inherit;font-weight:700;font-size:.78rem;padding:.35rem .8rem;border-radius:99px;background:rgba(255,255,255,.08);transition:background .3s}
   @media(hover:hover){.back:hover{background:rgba(255,255,255,.15)}}
@@ -1239,9 +1307,9 @@
   li{animation:fli .5s cubic-bezier(.16,1,.3,1) both;animation-delay:calc(var(--ld)*100ms + 300ms)}
   @keyframes fli{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
   .det-btns{display:flex;flex-wrap:wrap;gap:.55rem}
-  .det-art{display:grid;place-items:center}
+  
 
-  .stage{position:relative;width:min(100%,420px);aspect-ratio:360/300;perspective:1100px}
+  .dstage{position:relative;width:min(100%,420px);aspect-ratio:360/300;perspective:1100px}
   .scene{position:absolute;inset:0;transform-style:preserve-3d;transform:rotateX(var(--base,0));will-change:transform}
   .layer{position:absolute;inset:0;width:100%;height:100%;overflow:visible;transform:translateZ(var(--z,0))}
   .layer.lift{filter:drop-shadow(0 10px 10px rgba(0,0,0,.18))}
@@ -1297,7 +1365,7 @@
     .det-body{padding:clamp(.7rem,3vw,1rem)}.det h3{font-size:clamp(1.7rem,9vw,2.5rem)}.det-btns .btn{flex:1 1 100%}
   }
   @media(max-width:360px){:global(:root){--pad:.55rem}h1{font-size:clamp(1.7rem,13vw,2.4rem)}.brand-text{font-size:.68rem}}
-  @media(max-width:899px){.det-art{order:-1}.stage{width:min(100%,340px)}}
+  @media(max-width:899px){.det-art{order:-1}.dstage{width:min(100%,340px)}}
   @media(max-width:599px){
     .about-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:.6rem}
     .stat{min-width:0;padding:.8rem .3rem}.stat-icon{font-size:1.3rem}.stat-label{font-size:.58rem;letter-spacing:.03em}
@@ -1449,4 +1517,106 @@
   }
   @media(max-width:599px){footer.kf{padding-top:3rem;text-align:left}.kf-land{height:190px}}
   @media(prefers-reduced-motion:reduce){.kf-rider{animation:none}.kf-cta,.kf-cta span,.kf-col li a,.kf-col li a::after{transition:none}}
+
+  /* ===== MORPH SCROLL (kontinu) ===== */
+  .mslide{opacity:calc(1 - var(--a,0) * 1.5)}
+  .mslide.next{--d:1;--a:1}.mslide.prev{--d:-1;--a:1}
+  .mcopy{transform:translate3d(calc(var(--d,0) * -14vw),0,0);filter:blur(calc(var(--a,0) * 6px))}
+  .mart{transform:translate3d(calc(var(--d,0) * 26%),calc(var(--d,0) * -10%),0) rotate(calc(var(--d,0) * 16deg)) scale(calc(1 - var(--a,0) * .5))}
+  .mslide .scene{transform:rotateX(calc(var(--base,0deg) + var(--rx,0deg))) rotateY(calc(var(--ry,0deg) + var(--d,0) * -60deg))}
+  .mslide .layer{transform:translate3d(calc(var(--d,0) * var(--z,0px) * -1.2),0,var(--z,0px))}
+  .mblob{position:absolute;z-index:0;right:-6%;top:50%;width:min(62%,700px);translate:0 -50%;rotate:calc(var(--mp,0) * 70deg);overflow:visible;pointer-events:none}
+  .mblob path{fill:rgba(255,255,255,.12);stroke:rgba(255,255,255,.35);stroke-width:1.2;vector-effect:non-scaling-stroke}
+  .mghost{position:absolute;z-index:-1;left:0;bottom:-.12em;font-family:'Anton',sans-serif;font-size:clamp(7rem,26vw,24rem);line-height:.8;text-transform:uppercase;white-space:nowrap;color:transparent;-webkit-text-stroke:2px currentColor;opacity:.09;transform:translate3d(calc(var(--d,0) * -30%),0,0);pointer-events:none}
+  @media(max-width:759px){.mblob{right:50%;top:32%;translate:50% -50%;width:92%}}
+
+  /* ===== TRANSISI KARTU -> DETAIL ===== */
+  .nav{view-transition-name:nav}
+  :global(::view-transition-group(pcard)){animation-duration:.85s;animation-timing-function:cubic-bezier(.65,0,.35,1)}
+  :global(::view-transition-old(pcard)),:global(::view-transition-new(pcard)){height:100%;object-fit:cover}
+  :global(::view-transition-old(root)),:global(::view-transition-new(root)){animation-duration:.3s}
+
+  /* ===== HALAMAN DETAIL ===== */
+  .det-top,.det-body{position:relative;z-index:1}
+  .det-ghost{position:absolute;left:-2%;bottom:-.14em;z-index:0;font-family:'Anton',sans-serif;font-size:clamp(8rem,28vw,26rem);line-height:.8;text-transform:uppercase;white-space:nowrap;color:transparent;-webkit-text-stroke:2px currentColor;opacity:.08;pointer-events:none;animation:gl 1.2s cubic-bezier(.16,1,.3,1) .3s both}
+  @keyframes gl{from{transform:translateX(12%);opacity:0}to{transform:none;opacity:.08}}
+  .det h3{overflow:hidden;padding-bottom:.06em}
+  .det h3 span{display:inline-block;animation:chr .9s cubic-bezier(.2,.8,.2,1) both;animation-delay:calc(var(--c) * 60ms + 300ms)}
+  @keyframes chr{from{transform:translateY(110%) rotate(8deg);opacity:0}to{transform:none;opacity:1}}
+  .det ul{list-style:none;padding:0;counter-reset:pt;gap:.5rem;max-width:48ch}
+  .det li{counter-increment:pt;position:relative;padding:.7rem .9rem .7rem 3rem;border-radius:1rem;background:rgba(255,255,255,.08);box-shadow:inset 0 0 0 1px rgba(255,255,255,.12);font-weight:600;font-size:.92rem;transition:transform .35s cubic-bezier(.16,1,.3,1),background .3s}
+  .det li::before{content:counter(pt);position:absolute;left:.7rem;top:50%;translate:0 -50%;display:grid;place-items:center;width:1.7rem;height:1.7rem;border-radius:50%;background:currentColor;color:var(--bgc);font-family:'Anton',sans-serif;font-size:.85rem}
+  .det li::before{-webkit-text-fill-color:var(--bgc)}
+  @media(hover:hover){.det li:hover{transform:translateX(6px);background:rgba(255,255,255,.14)}}
+  .det-art{position:relative;display:grid;place-items:center}
+  .det-art::before{content:'';position:absolute;width:86%;aspect-ratio:1;background:currentColor;opacity:.12;animation:blobm 9s ease-in-out infinite}
+  @keyframes blobm{0%,100%{border-radius:60% 40% 30% 70%/60% 30% 70% 40%;transform:rotate(0)}50%{border-radius:30% 60% 70% 40%/50% 60% 30% 60%;transform:rotate(90deg) scale(1.06)}}
+  .det-art .dstage{position:relative;z-index:1;animation:pop 1s cubic-bezier(.34,1.4,.64,1) .35s both}
+  @keyframes pop{from{transform:scale(.4) rotate(-12deg);opacity:0}to{transform:none;opacity:1}}
+  @media(min-width:900px){.det-art{position:sticky;top:5.5rem}}
+  .det-next{all:unset;box-sizing:border-box;position:relative;z-index:1;cursor:pointer;display:flex;align-items:center;gap:1rem;width:100%;padding:1.3rem clamp(1rem,3vw,2rem);transition:padding .5s cubic-bezier(.16,1,.3,1)}
+  .det-next small{font-size:.68rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase;opacity:.6}
+  .det-next b{font-family:'Anton',sans-serif;font-weight:400;font-size:clamp(1.8rem,6vw,3.6rem);line-height:1;text-transform:uppercase;margin-right:auto}
+  .det-next i{font-style:normal;font-size:2rem;transition:transform .5s cubic-bezier(.16,1,.3,1)}
+  .det-next:focus-visible{outline:3px solid var(--cream);outline-offset:-6px}
+  @media(hover:hover){.det-next:hover i{transform:translateX(10px)}.det-next:hover{padding-left:calc(clamp(1rem,3vw,2rem) + 10px)}}
+  @media(prefers-reduced-motion:reduce){.mart,.mcopy{transform:none!important;filter:none!important}.mghost,.mblob{display:none}.det h3 span,.det-ghost,.det-art::before,.det-art .dstage{animation:none}}
+
+  /* ===== MORPH v2: lebih hidup ===== */
+  .mglow{background:radial-gradient(circle at var(--gx,30%) var(--gy,20%),rgba(255,255,255,.2),transparent 55%),radial-gradient(60% 70% at 88% 12%,rgb(var(--ac,255 255 255)/.45),transparent 70%),radial-gradient(50% 60% at 8% 100%,rgb(var(--ac,255 255 255)/.3),transparent 70%)}
+  .mpanel{transform:skewY(calc(var(--v,0) * -.3deg));transform-origin:50% 50%}
+  .mblob path{transform-box:fill-box;transform-origin:center}
+  .mblob .b2{fill:none;stroke:rgba(255,255,255,.35);stroke-dasharray:6 9;rotate:calc(var(--mp,0) * -110deg)}
+  .mblob .b3{fill:rgb(var(--ac,255 255 255)/.28);stroke:none;rotate:calc(var(--mp,0) * 40deg)}
+  .mdeco{position:absolute;inset:0;z-index:0;pointer-events:none}
+  .mdeco i{position:absolute;display:block}
+  .mdeco .d1{width:clamp(3rem,9vw,8rem);aspect-ratio:1;border:3px solid rgba(255,255,255,.35);border-radius:50%;right:46%;top:10%;translate:calc(var(--mp,0) * -120px) calc(var(--mp,0) * 60px)}
+  .mdeco .d2{width:clamp(1.4rem,3vw,2.6rem);aspect-ratio:1;background:rgb(var(--ac,255 255 255)/.85);border-radius:30%;right:7%;bottom:12%;translate:calc(var(--mp,0) * -90px) calc(var(--mp,0) * -70px);rotate:calc(var(--mp,0) * 180deg)}
+  .mdeco .d3{width:clamp(5rem,16vw,14rem);aspect-ratio:1;background:radial-gradient(circle,rgba(255,255,255,.5) 2px,transparent 2.5px) 0 0/16px 16px;left:40%;bottom:5%;translate:calc(var(--mp,0) * -160px) 0}
+  @media(max-width:759px){.mdeco .d1{right:6%;top:6%}.mdeco .d3{display:none}}
+  @media(prefers-reduced-motion:reduce){.mpanel{transform:none}.mdeco{display:none}}
+
+  /* ===== DETAIL: lebih pas ===== */
+  .det-wrap{scroll-margin-top:4.5rem}
+  .det{overflow:clip}
+  .det-top{position:sticky;top:3.2rem;z-index:3;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);background:color-mix(in srgb,var(--bgc) 82%,transparent)}
+  .det-body{align-items:start;gap:clamp(1rem,3vw,3rem)}
+  .det-copy{gap:.6rem}
+  .det h3{font-size:clamp(2.6rem,9vw,6.5rem)}
+  .det li{padding:.6rem .8rem .6rem 2.8rem;font-size:.88rem}
+  .det li::before{background:var(--fg);color:var(--bgc);-webkit-text-fill-color:var(--bgc)}
+  .det-art::before{width:min(92%,480px)}
+  .det-art .dstage{width:min(100%,480px)}
+  @media(min-width:900px){.det-art{top:6.5rem;align-self:start}}
+  @media(max-width:899px){.det-art .dstage{width:min(100%,340px)}}
+
+  /* ===== v3: teks selalu terbaca ===== */
+  .mslide{opacity:1}
+  .mcopy{opacity:var(--oc,1);filter:none;transform:translate3d(calc(var(--e,0) * -12vw),0,0)}
+  .mslide.prev .mcopy>*,.mslide.next .mcopy>*{filter:none}
+  .mart{opacity:var(--oa,1);transform:translate3d(calc(var(--d,0) * 26%),calc(var(--d,0) * -10%),0) rotate(calc(var(--d,0) * 16deg)) scale(calc(1 - var(--a2,0) * .5))}
+  .mpanel{transform:none}
+  .mglow{background:radial-gradient(circle at var(--gx,30%) var(--gy,20%),rgba(255,255,255,.14),transparent 55%),radial-gradient(55% 65% at 92% 8%,rgb(var(--ac,255 255 255)/.3),transparent 70%),radial-gradient(45% 55% at 100% 100%,rgb(var(--ac,255 255 255)/.2),transparent 70%)}
+  .mblob path.b1{fill:rgba(255,255,255,.08);stroke:rgba(255,255,255,.25)}
+  .mblob .b3{fill:rgb(var(--ac,255 255 255)/.18)}
+  .mghost{left:auto;right:-2%;opacity:.05}
+  @media(min-width:760px){
+    .mblob{right:-4%;width:min(54%,620px)}
+    .mdeco .d1{right:3%;top:7%}
+    .mdeco .d3{left:auto;right:5%;bottom:5%;opacity:.5}
+  }
+
+  /* ===== v3: detail lebih lega & seimbang ===== */
+  .det-body{min-height:min(calc(100svh - 9rem),640px);align-items:center;padding-block:clamp(1.5rem,4vw,3rem)}
+  .det-art,.det-art:where(*){position:relative;top:auto;align-self:center;padding:clamp(.5rem,2vw,1.5rem)}
+  .det-art::before{width:min(78%,430px)}
+  .det-more{position:relative;z-index:1;display:grid;gap:1.1rem;padding:0 clamp(1rem,3vw,2rem) clamp(1.5rem,3vw,2.5rem)}
+  .det-sub,.cred-t{margin:0;font-size:.7rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase;opacity:.6}
+  .det-more ul{max-width:none;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:.7rem}
+  .det li{padding:1rem 1rem 1rem 3.3rem;font-size:.9rem;line-height:1.45}
+  .det li::before{top:1rem;translate:none}
+  .cred{max-width:none;padding:1.1rem}
+  .csteps{grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));gap:.7rem}
+  .cstep{padding:.7rem;border-radius:.9rem;background:rgba(255,255,255,.1)}
+  @media(max-width:899px){.det-body{min-height:0;padding-block:1rem}}
 </style>
