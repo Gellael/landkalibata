@@ -26,11 +26,18 @@
       points:['Tujuan: skor paling kecil di antara semua pemain.','Song (−100 poin): habiskan semua kartu dengan memainkan seri baru.','Leng (−50 poin): habiskan semua kartu dengan cara selain seri baru.'],
       cta:'Mainkan sekarang', url:'https://songin.my.id', tilt:6, accent:'#d4181f',
       color:'var(--cream)', bg:'var(--maroon)', price:'Gratis', paid:false
+    },
+    {
+      id:'jeda', name:'Jeda', kind:'Pengecek pesan mencurigakan', icon:'shield',
+      desc:'Ragu sama pesan atau tautan yang masuk? Tempel di sini, Jeda tunjukkan bagian yang mencurigakan beserta alasannya.',
+      points:['Tempel pesan atau tautan yang terasa janggal, lalu cek sebelum kamu balas atau klik.','Bagian yang mencurigakan ditandai lengkap dengan alasannya, seperti urgensi atau permintaan data rahasia.','Ada mode latihan untuk mengenali modus penipuan, plus langkah darurat kalau terlanjur kena.','Tersedia dalam Bahasa Indonesia dan English.'],
+      cta:'Cek sekarang', url:'https://jeda-kalibata.vercel.app', tilt:10, accent:'#f59e0b',
+      color:'var(--cream)', bg:'#0b0906', price:'Gratis', paid:false
     }
   ];
 
   const stats = [
-    { val: '2', label: 'Produk Aktif', icon: 'layers' },
+    { val: '3', label: 'Produk Aktif', icon: 'layers' },
     { val: '3', label: 'Pengembang', icon: 'users' },
     { val: '2026', label: 'Tahun Berdiri', icon: 'cal' },
   ];
@@ -330,9 +337,7 @@
   let mode: 'browse' | 'detail' = 'browse';
   let activeIdx = 0;
   let openedId: string | null = null;
-  const SLIDE_MS = 4500;
-  let timer: ReturnType<typeof setInterval> | null = null;
-  let transitioning = false;
+  let trackEl: HTMLDivElement | null = null;
 
   let bar: HTMLDivElement;
   let navScrolled = false;
@@ -343,33 +348,45 @@
   let heroBg: HTMLDivElement;
   let bandEl: HTMLDivElement;
   let showTop = false;
-  let touchX = 0;
   let particles: {x:number;y:number;s:number;sp:number;o:number;d:number}[] = [];
 
   const noMo = () => matchMedia('(prefers-reduced-motion:reduce)').matches;
 
   function mkPart() { particles = Array.from({length:12},()=>({x:Math.random()*100,y:Math.random()*100,s:Math.random()*3+1.5,sp:Math.random()*25+18,o:Math.random()*0.14+0.04,d:Math.random()*-20})); }
 
-  function startAuto() { stopAuto(); if(noMo()) return; timer=setInterval(()=>{ nextSlide(); }, SLIDE_MS); }
-  function stopAuto() { if(timer){clearInterval(timer);timer=null;} }
+  // bentuk panel yang berubah-ubah (kelipatan --u, supaya ikut mengecil di HP)
+  const shapes = ['1 1 1 1', '3 1 3 1', '1 3 1 3', '3 3 1 1'].map(s => s.split(' ').map(n => `calc(var(--u) * ${n})`).join(' '));
+  $: curP = projects[activeIdx];
 
-  function nextSlide() {
-    if(transitioning) return;
-    transitioning = true;
-    setTimeout(()=>{ activeIdx = (activeIdx+1)%projects.length; transitioning=false; }, 50);
+  // posisi scroll di dalam trek menentukan proyek mana yang tampil
+  function stepTop(i: number) {
+    if (!trackEl) return 0;
+    const total = trackEl.offsetHeight - innerHeight;
+    return trackEl.getBoundingClientRect().top + scrollY + (projects.length > 1 ? i / (projects.length - 1) : 0) * total;
   }
 
-  function goSlide(i:number) { activeIdx=i; stopAuto(); startAuto(); }
+  function syncMorph() {
+    if (!trackEl) return;
+    const total = trackEl.offsetHeight - innerHeight;
+    if (total <= 0) return;
+    const p = Math.min(1, Math.max(0, -trackEl.getBoundingClientRect().top / total));
+    const i = Math.round(p * (projects.length - 1));
+    if (i !== activeIdx) activeIdx = i;
+  }
+
+  function goSlide(i: number) { scrollTo({ top: stepTop(i), behavior: noMo() ? 'instant' : 'smooth' }); }
 
   async function openProject(id:string) {
-    stopAuto(); openedId=id; mode='detail';
+    openedId=id; mode='detail';
     await svelteTick();
     detailEl?.scrollIntoView({behavior:noMo()?'auto':'smooth',block:'start'});
   }
 
-  function backToSlideshow() {
-    mode='browse'; openedId=null; activeIdx=0; startAuto();
-    projEl?.scrollIntoView({behavior:noMo()?'auto':'smooth',block:'start'});
+  async function backToSlideshow() {
+    const i = Math.max(0, projects.findIndex(p => p.id === openedId));
+    mode='browse'; openedId=null; activeIdx=i;
+    await svelteTick();
+    scrollTo({ top: stepTop(i), behavior: 'instant' });
   }
 
   $: cur = projects.find(p=>p.id===openedId)??null;
@@ -377,12 +394,6 @@
   function rise(n:Element,{duration=700}={}) {
     return {duration:noMo()?0:duration,easing:cubicOut,
       css:(t:number)=>`opacity:${t};transform:perspective(1200px) rotateX(${(1-t)*-14}deg) translateY(${(1-t)*60}px) scale(${.93+t*.07})`};
-  }
-
-  function onTS(e:TouchEvent){ touchX=e.touches[0].clientX; }
-  function onTE(e:TouchEvent){
-    const dx=e.changedTouches[0].clientX-touchX;
-    if(Math.abs(dx)>45) goSlide((activeIdx+(dx<0?1:-1)+projects.length)%projects.length);
   }
 
   // angka naik pelan saat masuk layar
@@ -437,10 +448,12 @@
   }
 
   onMount(()=>{
-    mkPart(); startAuto();
-    const onScroll=()=>{navScrolled=scrollY>50;showTop=scrollY>700;};
+    mkPart();
+    const onScroll=()=>{navScrolled=scrollY>50;showTop=scrollY>700;syncMorph();};
     addEventListener('scroll',onScroll,{passive:true});
-    if(noMo()) return()=>{stopAuto();removeEventListener('scroll',onScroll);};
+    addEventListener('resize',syncMorph,{passive:true});
+    syncMorph();
+    if(noMo()) return()=>{removeEventListener('scroll',onScroll);removeEventListener('resize',syncMorph);};
     const clamp=(v:number,a=0,b=1)=>Math.min(b,Math.max(a,v));
     const doc=document.documentElement;let vh=innerHeight;
     const hov=matchMedia('(hover:hover)').matches;
@@ -469,7 +482,7 @@
       raf=requestAnimationFrame(frame);
     };
     raf=requestAnimationFrame(frame);
-    return()=>{cancelAnimationFrame(raf);stopAuto();removeEventListener('resize',onR);removeEventListener('pointermove',onP);removeEventListener('scroll',onScroll);};
+    return()=>{cancelAnimationFrame(raf);removeEventListener('resize',syncMorph);removeEventListener('resize',onR);removeEventListener('pointermove',onP);removeEventListener('scroll',onScroll);};
   });
 
   // === MINIGAME FOOTER: kuda melompati rintangan ===
@@ -633,6 +646,10 @@
     <svg class="layer" style="--z:0px" viewBox="0 0 360 300"><g transform="rotate(-12 150 150)"><rect x="70" y="30" width="170" height="240" rx="16" fill="#d4181f" stroke="#fbf3ea" stroke-width="5"/><circle cx="155" cy="150" r="34" fill="none" stroke="#fbf3ea" stroke-width="5"/><path d="M155 128v44M133 150h44M139 134l32 32M171 134l-32 32" stroke="#fbf3ea" stroke-width="5"/></g></svg>
     <svg class="layer lift fx" style="--z:60px;--fd:-1.2s" viewBox="0 0 360 300"><g transform="rotate(9 220 150)"><rect x="140" y="30" width="170" height="240" rx="16" fill="#fbf3ea"/><text x="158" y="78" font-family="Anton,sans-serif" font-size="46" fill="#7e0f14">A</text><path d="M170 98l14 18-14 18-14-18z" fill="#7e0f14"/></g></svg>
     <svg class="layer fx" style="--z:120px;--fs:3.2s;--fd:-2.4s" viewBox="0 0 360 300"><g transform="rotate(9 220 150)"><path d="M225 215c-30-26-48-40-48-62 0-30 36-38 48-12 12-26 48-18 48 12 0 22-18 36-48 62z" fill="#d4181f"/><text x="292" y="256" text-anchor="end" font-family="Anton,sans-serif" font-size="32" fill="#7e0f14">−100</text></g></svg>
+  {:else if id === 'jeda'}
+    <svg class="layer lift" style="--z:0px" viewBox="0 0 360 300"><rect x="30" y="36" width="250" height="176" rx="22" fill="#1d160a" stroke="#f59e0b" stroke-opacity=".4" stroke-width="2"/><g fill="#fbf3ea"><rect x="52" y="62" width="130" height="10" rx="5" opacity=".85"/><rect x="124" y="88" width="104" height="10" rx="5" opacity=".85"/><rect x="52" y="118" width="176" height="10" rx="5" opacity=".85"/><rect x="152" y="146" width="62" height="10" rx="5" opacity=".85"/><rect x="52" y="178" width="140" height="10" rx="5" opacity=".45"/></g><rect x="52" y="84" width="64" height="18" rx="4" fill="#ef4444" fill-opacity=".35"/><rect x="52" y="100" width="64" height="3" fill="#ef4444"/><rect x="52" y="142" width="92" height="18" rx="4" fill="#ef4444" fill-opacity=".35"/><rect x="52" y="158" width="92" height="3" fill="#ef4444"/></svg>
+    <svg class="layer fx" style="--z:70px;--fs:3.4s" viewBox="0 0 360 300"><rect x="262" y="104" width="32" height="124" rx="12" fill="#f59e0b"/><rect x="306" y="140" width="32" height="88" rx="12" fill="#f59e0b"/></svg>
+    <svg class="layer lift fx" style="--z:130px;--fs:2.6s;--fd:-1s" viewBox="0 0 360 300"><g transform="translate(120 82)"><circle r="14" fill="#ef4444"/><text y="6" text-anchor="middle" font-family="Anton,sans-serif" font-size="17" fill="#fff">1</text></g><g transform="translate(150 140)"><circle r="14" fill="#ef4444"/><text y="6" text-anchor="middle" font-family="Anton,sans-serif" font-size="17" fill="#fff">2</text></g><circle cx="76" cy="246" r="24" fill="#f59e0b"/><path d="M65 246l8 8 15-17" stroke="#0b0906" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
   {:else}
     <svg class="layer lift" style="--z:0px" viewBox="0 0 360 300"><rect x="20" y="20" width="320" height="260" rx="14" fill="#e9fbf0"/><g class="wave" fill="none" stroke="#1fbf6b" stroke-width="3" stroke-linecap="round"><path d="M40 90c50-40 110 30 170-8s90-10 110 20"/><path d="M40 140c60-30 100 40 170 0s80 0 110 18"/><path d="M40 190c50-20 110 40 170 0s90 4 110 20"/></g></svg>
     <svg class="layer" style="--z:40px" viewBox="0 0 360 300"><path class="route" d="M60 255c40-60 100-30 140-80s60-70 100-90" fill="none" stroke="#06361f" stroke-width="4" stroke-dasharray="2 10" stroke-linecap="round"/><path d="M44 262h90M44 256v12M89 258v8M134 256v12" stroke="#06361f" stroke-width="3"/><ellipse class="ring" cx="205" cy="178" rx="12" ry="4.5" fill="none" stroke="#06361f" stroke-width="3"/></svg>
@@ -648,6 +665,7 @@
     {:else if n==='map'}<path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14M15 6v14"/>
     {:else if n==='layers'}<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>
     {:else if n==='cal'}<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/>
+    {:else if n==='shield'}<path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>
     {:else if n==='bulb'}<path d="M9 18h6M10 21h4M12 3a6 6 0 00-3.5 10.9c.6.5 1 1.2 1 2.1h5c0-.9.4-1.6 1-2.1A6 6 0 0012 3z"/>
     {:else if n==='bolt'}<path d="M13 2L4 14h7l-1 8 9-12h-7z"/>
     {:else if n==='pen'}<path d="M4 20l1-4L16 5l3 3L8 19z"/><path d="M14 7l3 3"/>
@@ -719,7 +737,7 @@
         <div class="about-text" use:obs>
           <p class="label">Tentang kami</p>
           <h2>Kalibata<br/>Project</h2>
-          <p class="about-desc">Kami adalah tim kecil yang percaya bahwa ide bagus layak diwujudkan. Kalibata Project membangun produk digital dari tools pembuat peta sampai game kartu yang bisa langsung dipakai siapa saja. Ada yang gratis, ada yang memakai kredit.</p>
+          <p class="about-desc">Kami adalah tim kecil yang percaya bahwa ide bagus layak diwujudkan. Kalibata Project membangun produk digital dari tools pembuat peta, game kartu, sampai pengecek pesan mencurigakan yang bisa langsung dipakai siapa saja. Ada yang gratis, ada yang memakai kredit.</p>
           <p class="about-desc">Setiap proyek kami dimulai dari satu pertanyaan sederhana: <strong>"Bagaimana kalau ini ada?"</strong></p>
         </div>
         <div class="about-stats" use:obs data-delay="200">
@@ -759,80 +777,48 @@
       <div class="proj-head" use:obs>
         <p class="label">Proyek kami</p>
         <h2>Semua<br/>proyek.</h2>
-        <p class="proj-sub">Pilih kartu untuk lihat detailnya, atau geser untuk proyek lainnya.</p>
+        <p class="proj-sub">Scroll untuk melihat proyek satu per satu, klik untuk lihat detailnya.</p>
       </div>
 
       {#if mode === 'browse'}
-        <div class="clothesline">
-          <!-- Tali -->
-          <svg class="rope" viewBox="0 0 1000 70" preserveAspectRatio="none" aria-hidden="true">
-            <line x1="20" y1="0" x2="20" y2="30" stroke="var(--maroon)" stroke-width="4" opacity=".35"/>
-            <line x1="980" y1="0" x2="980" y2="24" stroke="var(--maroon)" stroke-width="4" opacity=".35"/>
-            <path d="M20 30 Q280 62 500 42 Q720 22 980 24" fill="none" stroke="var(--maroon)" stroke-width="3" stroke-linecap="round" opacity=".45"/>
-            <path d="M20 33 Q280 65 500 45 Q720 25 980 27" fill="none" stroke="rgba(0,0,0,.06)" stroke-width="5" stroke-linecap="round"/>
-          </svg>
+        <!-- Trek scroll: panel menempel (sticky), tiap langkah scroll mengubah panel jadi proyek berikutnya -->
+        <div class="mtrack" bind:this={trackEl} style="--n:{projects.length}">
+          <div class="mstick">
+            <div class="mtop">
+              <span class="mcount"><b>0{activeIdx + 1}</b> / 0{projects.length}</span>
+              <span class="mhint">Scroll ↓</span>
+            </div>
 
-          <!-- 3D Carousel cards -->
-          <div class="carousel" on:touchstart|passive={onTS} on:touchend|passive={onTE}>
-            {#each projects as p, i (p.id)}
-              <button
-                class="ccard"
-                class:active={activeIdx===i}
-                class:left={activeIdx>i}
-                class:right={activeIdx<i}
-                on:click={() => activeIdx===i ? openProject(p.id) : goSlide(i)}
-                aria-label="{p.name}"
-                style="--ci:{i};--rot:{i%2===0?3:-4}deg"
-              >
-                <!-- Pin -->
-                <div class="cpin">
-                  <div class="pin-wood"><div class="pin-top"></div><div class="pin-coil"></div><div class="pin-l"></div><div class="pin-r"></div></div>
-                </div>
-                <div class="cstring"></div>
-
-                <!-- Card -->
-                <div class="cbody" use:tilt style="background:{p.bg};color:{p.color}">
-                  <div class="cbody-glow"></div>
-                  <span class="badge" class:paid={p.paid}>{#if p.paid}{@render icon('coin')}{/if}{p.price}</span>
-                  <span class="cemoji">{@render icon(p.icon)}</span>
-                  <span class="cnum">0{i+1}</span>
-                  <span class="ckind">{p.kind}</span>
-                  <h3 class="cname">{p.name}</h3>
-
-                  <!-- Art — only visible when active -->
-                  <div class="cart">
-                    <div class="cstage"><div class="scene" style="--base:{p.tilt*.3}deg">{@render art(p.id)}</div></div>
+            <div class="mpanel" use:tilt style="background-color:{curP.bg};color:{curP.color};border-radius:{shapes[activeIdx % shapes.length]}">
+              <div class="mglow"></div>
+              {#each projects as p, i (p.id)}
+                <div class="mslide" class:on={activeIdx === i} class:prev={i < activeIdx} class:next={i > activeIdx}
+                  inert={activeIdx !== i} aria-hidden={activeIdx !== i}>
+                  <div class="mcopy">
+                    <span class="mnum" style="--k:0">0{i + 1}</span>
+                    <span class="badge inl" class:paid={p.paid} style="--k:1">{#if p.paid}{@render icon('coin')}{/if}{p.price}</span>
+                    <p class="mkind" style="--k:2">{@render icon(p.icon)}{p.kind}</p>
+                    <h3 class="mname" style="--k:3">{p.name}</h3>
+                    <p class="mdesc" style="--k:4">{p.desc}</p>
+                    <div class="mbtns" style="--k:5">
+                      <button class="btn" on:click={() => openProject(p.id)}>Lihat detail →</button>
+                      <a class="btn ghost" href={p.url} target="_blank" rel="noopener noreferrer">{p.cta} ↗</a>
+                    </div>
                   </div>
-
-                  <p class="cdesc">{p.desc}</p>
-                  <span class="ccta">
-                    {#if activeIdx===i}
-                      Klik untuk buka detail →
-                    {:else}
-                      Klik untuk melihat
-                    {/if}
-                  </span>
+                  <div class="mart">
+                    <div class="mstage"><div class="scene" style="--base:{p.tilt * .3}deg">{@render art(p.id)}</div></div>
+                  </div>
                 </div>
-              </button>
-            {/each}
-          </div>
+              {/each}
+            </div>
 
-          <!-- Nav arrows + dots -->
-          <div class="slide-nav">
-            <button class="arrow" on:click={()=>goSlide((activeIdx-1+projects.length)%projects.length)} aria-label="Sebelumnya">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </button>
-            <div class="dots">
+            <div class="mrail">
               {#each projects as p, i}
-                <button class="dot" class:on={activeIdx===i} on:click={()=>goSlide(i)} aria-label={p.name}>
-                  <span class="dot-fill" class:run={activeIdx===i}></span>
-                  <span class="dot-label">{p.name}</span>
+                <button class="mtick" class:on={activeIdx === i} class:done={i < activeIdx} on:click={() => goSlide(i)} aria-label={p.name}>
+                  <i></i><span>{p.name}</span>
                 </button>
               {/each}
             </div>
-            <button class="arrow" on:click={()=>goSlide((activeIdx+1)%projects.length)} aria-label="Berikutnya">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </button>
           </div>
         </div>
       {/if}
@@ -1102,7 +1088,7 @@
   :global(:root){--red:#d4181f;--maroon:#7e0f14;--cream:#fbf3ea;--green:#1fbf6b;--forest:#06361f;--pad:clamp(1rem,5vw,4.5rem)}
   :global(html){scroll-behavior:smooth;overflow-x:clip}
   :global(body){margin:0;background:var(--red);color:var(--cream);font-family:'Archivo',system-ui,sans-serif;line-height:1.55;overflow-x:hidden;overflow-x:clip;-webkit-text-size-adjust:100%}
-  h1,h2,h3,h4,.brand-text,.cname,.band span{font-family:'Anton','Archivo',sans-serif;font-weight:400}
+  h1,h2,h3,h4,.brand-text,.band span{font-family:'Anton','Archivo',sans-serif;font-weight:400}
   a{color:inherit;text-decoration:none}:global(:focus-visible){outline:3px solid var(--cream);outline-offset:3px}
   .wrap{width:100%;max-width:1440px;margin-inline:auto;padding-inline:var(--pad)}
   .particles{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
@@ -1174,72 +1160,55 @@
   .proj-head{margin-bottom:1.5rem}.proj-head h2{margin:0;font-size:clamp(2.6rem,9vw,6.5rem);line-height:.88;text-transform:uppercase}
   .proj-sub{margin:.4rem 0 0;font-size:clamp(.85rem,1.3vw,1rem);font-weight:600;opacity:.45}
 
-  /* ===== CLOTHESLINE ===== */
-  .clothesline{position:relative;padding:1rem 0 0}
-  .rope{display:block;width:100%;height:70px;margin-bottom:-30px;position:relative;z-index:1}
+  /* ===== PROYEK: PANEL MORPH SAAT SCROLL ===== */
+  .mtrack{--u:40px;position:relative;height:calc(100vh + (var(--n) - 1) * 85vh);height:calc(100svh + (var(--n) - 1) * 85svh)}
+  .mstick{position:sticky;top:0;height:100vh;height:100svh;display:flex;flex-direction:column;justify-content:center;gap:.9rem;padding:4.6rem 0 1.2rem}
+  .mtop{display:flex;justify-content:space-between;align-items:center;font-size:.72rem;font-weight:800;letter-spacing:.12em;text-transform:uppercase}
+  .mcount{opacity:.7}.mcount b{font-family:'Anton',sans-serif;font-weight:400;font-size:1.5rem;letter-spacing:.02em}
+  .mhint{opacity:.4}
 
-  /* 3D CAROUSEL */
-  .carousel{position:relative;z-index:2;display:flex;gap:clamp(1rem,3vw,2.5rem);justify-content:center;align-items:flex-start;padding:0 var(--pad);perspective:1000px}
+  .mpanel{position:relative;flex:1 1 auto;min-height:0;max-height:680px;overflow:hidden;isolation:isolate;box-shadow:0 24px 60px rgba(0,0,0,.16);transition:background-color .9s cubic-bezier(.65,0,.35,1),color .9s cubic-bezier(.65,0,.35,1),border-radius 1.1s cubic-bezier(.65,0,.35,1)}
+  .mglow{position:absolute;inset:0;z-index:0;pointer-events:none;background:radial-gradient(circle at var(--gx,30%) var(--gy,20%),rgba(255,255,255,.2),transparent 60%)}
 
-  .ccard{
-    all:unset;cursor:pointer;position:relative;display:flex;flex-direction:column;align-items:center;
-    width:clamp(220px,38vw,360px);
-    transform-origin:top center;
-    transition:all .7s cubic-bezier(.34,1.56,.64,1);
-    animation:sway 5.5s ease-in-out infinite;animation-delay:calc(var(--ci)*.8s);
+  .mslide{position:absolute;inset:0;z-index:1;display:grid;grid-template-columns:1.05fr 1fr;align-items:center;gap:clamp(1rem,3vw,3rem);padding:clamp(1.5rem,4vw,3rem) clamp(2.2rem,7vw,5.5rem);pointer-events:none}
+  .mslide.on{pointer-events:auto}
+  .mcopy{display:flex;flex-direction:column;align-items:flex-start;gap:.55rem;min-width:0}
+  .mcopy>*{margin:0;transition:opacity .4s ease,transform .6s cubic-bezier(.16,1,.3,1),filter .4s ease}
+  .mslide.on .mcopy>*{transition-delay:calc(var(--k) * 70ms + 300ms)}
+  .mslide.prev .mcopy>*{opacity:0;transform:translateY(-40px);filter:blur(8px)}
+  .mslide.next .mcopy>*{opacity:0;transform:translateY(40px);filter:blur(8px)}
+  .mnum{font-size:.7rem;font-weight:800;letter-spacing:.12em;opacity:.4}
+  .mkind{display:flex;align-items:center;gap:.5rem;font-size:.85rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;opacity:.75}
+  .mkind .ico{width:1.3em;height:1.3em;flex:none}
+  .mname{font-size:clamp(2.8rem,8vw,7rem);line-height:.88;text-transform:uppercase;overflow-wrap:anywhere}
+  .mdesc{max-width:38ch;font-size:clamp(.88rem,1.3vw,1.05rem);font-weight:600;line-height:1.55;opacity:.8}
+  .mbtns{display:flex;flex-wrap:wrap;gap:.55rem;margin-top:.5rem}
+
+  .mart{display:grid;place-items:center;min-height:0;transition:transform 1s cubic-bezier(.34,1.3,.64,1),opacity .5s ease}
+  .mslide.on .mart{transition-delay:.15s}
+  .mslide.prev .mart{opacity:0;transform:translateY(-10%) scale(.55) rotate(-14deg)}
+  .mslide.next .mart{opacity:0;transform:translateY(10%) scale(.55) rotate(14deg)}
+  .mstage{position:relative;width:min(100%,430px);aspect-ratio:360/300;perspective:1100px}
+
+  .mrail{display:flex;gap:.6rem}
+  .mtick{all:unset;cursor:pointer;flex:1;display:flex;flex-direction:column;gap:.45rem;min-width:0;font-size:.68rem;font-weight:800;letter-spacing:.1em;text-transform:uppercase;opacity:.4;transition:opacity .3s}
+  .mtick i{display:block;position:relative;overflow:hidden;height:3px;border-radius:3px;background:rgba(126,15,20,.15)}
+  .mtick i::after{content:'';position:absolute;inset:0;background:var(--maroon);transform:scaleX(0);transform-origin:left;transition:transform .7s cubic-bezier(.16,1,.3,1)}
+  .mtick.on{opacity:1}.mtick.on i::after,.mtick.done i::after{transform:scaleX(1)}
+  .mtick:focus-visible{outline:3px solid var(--maroon);outline-offset:4px}
+  @media(hover:hover){.mtick:hover{opacity:.85}}
+
+  @media(max-width:599px){
+    .mtrack{--u:24px}
+    .mstick{padding-top:4rem;gap:.7rem}.mhint{display:none}
+    .mpanel{max-height:none}
+    .mslide{grid-template-columns:1fr;grid-template-rows:minmax(0,.9fr) auto;gap:.5rem;padding:1.3rem 1.2rem 1.8rem}
+    .mart{order:-1}.mstage{height:100%;width:auto;max-width:100%}
+    .mname{font-size:clamp(2.4rem,14vw,3.6rem)}
+    .mdesc{font-size:.82rem;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+    .mbtns .btn{min-height:40px;padding:.55rem 1rem;font-size:.82rem}
   }
-  @keyframes sway{0%,100%{transform:rotate(var(--rot)) translateY(0)}50%{transform:rotate(calc(var(--rot)*-.5)) translateY(2px)}}
-
-  /* ACTIVE card — center, expanded */
-  .ccard.active{animation:none;transform:rotate(0) translateY(-22px) scale(1.05);z-index:5}
-  /* LEFT of active — pushed back left */
-  .ccard.left{animation:none;transform:rotate(8deg) translateX(-20px) translateY(10px) scale(.88);opacity:.35;filter:blur(.8px)}
-  /* RIGHT of active — pushed back right */
-  .ccard.right{animation:none;transform:rotate(-8deg) translateX(20px) translateY(10px) scale(.88);opacity:.35;filter:blur(.8px)}
-
-  .cpin{position:relative;z-index:3;width:18px;height:34px;margin-bottom:-5px;transition:transform .5s cubic-bezier(.34,1.56,.64,1)}
-  .pin-wood{position:relative;width:100%;height:100%}
-  .pin-top{position:absolute;top:0;left:2px;right:2px;height:13px;background:linear-gradient(135deg,#d4a76a,#c49154);border-radius:3px 3px 1px 1px;box-shadow:0 1px 2px rgba(0,0,0,.12)}
-  .pin-coil{position:absolute;top:11px;left:4px;right:4px;height:5px;background:linear-gradient(90deg,#999,#bbb,#999);border-radius:2px}
-  .pin-l,.pin-r{position:absolute;top:14px;width:6px;height:20px;background:linear-gradient(135deg,#d4a76a,#b8824a);border-radius:0 0 2px 2px}
-  .pin-l{left:1px}.pin-r{right:1px}
-  .ccard.active .cpin{transform:translateY(-3px) scale(1.06)}
-
-  .cstring{width:1px;height:10px;background:rgba(126,15,20,.25);margin-bottom:-1px}
-
-  .cbody{position:relative;width:100%;border-radius:1.15rem;overflow:hidden;transition:all .6s cubic-bezier(.34,1.56,.64,1);box-shadow:0 5px 20px rgba(0,0,0,.06)}
-  .ccard.active .cbody{box-shadow:0 16px 48px rgba(0,0,0,.14),0 4px 12px rgba(0,0,0,.06);border-radius:1.3rem}
-  .cbody-glow{position:absolute;inset:0;background:radial-gradient(circle at var(--gx,30%) var(--gy,20%),rgba(255,255,255,.24),transparent 60%);pointer-events:none;z-index:0}
-
-  .cemoji{position:relative;z-index:1;font-size:2.5rem;line-height:1;padding-top:1.2rem;text-align:center;display:block;filter:drop-shadow(0 2px 4px rgba(0,0,0,.1));transition:transform .5s cubic-bezier(.34,1.56,.64,1)}
-  .ccard.active .cemoji{transform:scale(1.15) translateY(-2px)}
-  .cnum{position:relative;z-index:1;display:block;text-align:center;font-size:.6rem;font-weight:800;letter-spacing:.1em;opacity:.3;margin-top:.3rem}
-  .ckind{position:relative;z-index:1;display:block;text-align:center;font-size:.72rem;font-weight:700;opacity:.6;text-transform:uppercase;letter-spacing:.05em}
-  .cname{position:relative;z-index:1;margin:0;text-align:center;font-size:clamp(1.8rem,6vw,2.8rem);line-height:.92;text-transform:uppercase;padding:.1rem .8rem}
-
-  .cart{position:relative;z-index:1;width:70%;margin:.5rem auto 0;max-height:0;overflow:hidden;opacity:0;transition:all .6s cubic-bezier(.16,1,.3,1)}
-  .ccard.active .cart{max-height:300px;opacity:1}
-  .cstage{width:100%;aspect-ratio:360/300;perspective:700px;position:relative}
-  .cdesc{position:relative;z-index:1;margin:0;padding:0 clamp(.6rem,2vw,1.2rem);font-size:.8rem;line-height:1.4;opacity:0;max-height:0;overflow:hidden;transition:all .5s cubic-bezier(.16,1,.3,1);text-align:left}
-  .ccard.active .cdesc{opacity:.75;max-height:120px;margin-top:.4rem}
-  .ccta{position:relative;z-index:1;display:block;text-align:center;font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;opacity:0;padding:.6rem .5rem .8rem;transition:opacity .4s}
-  .ccard.active .ccta{opacity:.8}
-
-  @media(hover:hover){
-    .ccard.left:hover,.ccard.right:hover{opacity:.6;filter:blur(0);transform:scale(.92) translateY(5px)}
-    .ccard.active:hover .ccta{opacity:1;text-decoration:underline}
-  }
-
-  .slide-nav{display:flex;align-items:center;justify-content:center;gap:1rem;margin-top:1.8rem}
-  .arrow{all:unset;cursor:pointer;display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:rgba(126,15,20,.08);color:var(--maroon);transition:all .3s}
-  @media(hover:hover){.arrow:hover{background:var(--maroon);color:var(--cream);transform:scale(1.08)}}
-  .dots{display:flex;gap:.4rem}
-  .dot{all:unset;cursor:pointer;position:relative;width:42px;height:4px;border-radius:4px;background:rgba(126,15,20,.1);overflow:hidden}
-  .dot-fill{position:absolute;inset:0;background:var(--maroon);border-radius:inherit;transform:scaleX(0);transform-origin:left}
-  .dot-fill.run{animation:df 4.5s linear forwards}
-  @keyframes df{to{transform:scaleX(1)}}
-  .dot-label{position:absolute;bottom:8px;left:50%;transform:translateX(-50%);font-size:.6rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap;opacity:0;transition:opacity .3s;color:var(--maroon)}
-  .dot:hover .dot-label,.dot.on .dot-label{opacity:1}
+  @media(prefers-reduced-motion:reduce){.mpanel,.mcopy>*,.mart,.mtick,.mtick i::after{transition:none!important}}
 
   /* DETAIL */
   .det-wrap{scroll-margin-top:1rem;margin-top:1.5rem}
@@ -1271,11 +1240,9 @@
   .nav{padding-top:max(.75rem,env(safe-area-inset-top))}
 
   .ico{width:1em;height:1em;stroke-width:1.7;overflow:visible}
-  .cemoji .ico,.stat-icon .ico{margin-inline:auto}.mc-icon{color:var(--red)}
+  .stat-icon .ico{margin-inline:auto}.mc-icon{color:var(--red)}
   h1 span:nth-child(odd){translate:calc(var(--p,0)*-9vw) 0}
   h1 span:nth-child(even){translate:calc(var(--p,0)*9vw) 0}
-  .rope{transform-origin:50% 0;transform:scaleY(calc(1 + var(--v,0)*.025))}
-  @media(min-width:600px){.carousel{transform-origin:50% 0;transform:rotate(calc(var(--v,0)*.3deg))}}
 
   /* ===== FX ===== */
   .hero-bg::after{content:'';position:absolute;inset:0;background:radial-gradient(520px circle at var(--mx,50%) var(--my,40%),rgba(255,214,170,.28),transparent 65%);pointer-events:none}
@@ -1289,7 +1256,6 @@
   .btn::after{content:'';position:absolute;inset:0;background:linear-gradient(110deg,transparent 35%,rgba(255,255,255,.4) 50%,transparent 65%);transform:translateX(-130%);pointer-events:none}
   @media(hover:hover){.btn:hover::after{transform:translateX(130%);transition:transform .8s cubic-bezier(.16,1,.3,1)}}
 
-  .ccard.active .cbody{transform:perspective(900px) rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg));transition:transform .18s ease-out,box-shadow .6s,border-radius .6s}
 
   .fx{animation:fb var(--fs,4s) ease-in-out var(--fd,0s) infinite}
   @keyframes fb{50%{translate:0 -8px}}
@@ -1299,13 +1265,12 @@
   @keyframes wave{from{transform:translateX(-7px)}to{transform:translateX(7px)}}
   .ring{transform-box:fill-box;transform-origin:center;animation:ring 2.4s ease-out infinite}
   @keyframes ring{0%{transform:scale(.3);opacity:.9}100%{transform:scale(3);opacity:0}}
-  @media(prefers-reduced-motion:reduce){.fx,.route,.wave,.ring,.contour,h1 span:last-child{animation:none}.btn::after{display:none}.ccard.active .cbody{transition:none}}
+  @media(prefers-reduced-motion:reduce){.fx,.route,.wave,.ring,.contour,h1 span:last-child{animation:none}.btn::after{display:none}}
 
   /* RESPONSIVE */
   @media(min-width:768px){.about-grid{grid-template-columns:1.2fr 1fr;align-items:center}}
   @media(min-width:900px){.det-body{grid-template-columns:1.1fr 1fr}}
   @media(min-width:900px) and (min-height:600px){.hero{position:sticky;top:0;z-index:0}.about{border-radius:2rem 2rem 0 0;box-shadow:0 -8px 30px rgba(0,0,0,.06)}}
-  @media(min-width:1000px){.ccard{width:clamp(260px,28vw,400px)}}
 
   @media(max-width:599px){
     .nav{gap:.2rem}.brand-text{font-size:.75rem}.brand-logo{width:24px;height:24px}
@@ -1315,27 +1280,19 @@
     .about{padding:3rem 0 2rem}.about-text h2{font-size:clamp(2.2rem,11vw,3.2rem)}.about-stats{gap:.8rem}
     .stat{padding:.9rem 1rem;min-width:90px}.stat-val{font-size:clamp(1.4rem,5vw,2rem)}
     .proj{padding:1.5rem 0 3rem}.proj-head h2{font-size:clamp(2rem,10vw,3rem)}
-    .carousel{flex-direction:column;align-items:center;gap:1rem;perspective:none}
-    .ccard{width:min(100%,340px);animation:none!important;transform:rotate(0)!important}
-    .ccard.active{transform:translateY(-8px) scale(1.02)!important}
-    .ccard.left,.ccard.right{transform:scale(.95)!important;opacity:.4;filter:blur(.3px)}
-    .rope{display:none}.cpin{display:none}.cstring{display:none}
-    .cbody{border-radius:.85rem}
     .det-body{padding:clamp(.7rem,3vw,1rem)}.det h3{font-size:clamp(1.7rem,9vw,2.5rem)}.det-btns .btn{flex:1 1 100%}
-      .arrow{width:34px;height:34px}
   }
-  @media(max-width:360px){:global(:root){--pad:.55rem}h1{font-size:clamp(1.7rem,13vw,2.4rem)}.brand-text{font-size:.68rem}.cname{font-size:clamp(1.4rem,8vw,1.8rem)}}
+  @media(max-width:360px){:global(:root){--pad:.55rem}h1{font-size:clamp(1.7rem,13vw,2.4rem)}.brand-text{font-size:.68rem}}
   @media(max-width:899px){.det-art{order:-1}.stage{width:min(100%,340px)}}
   @media(max-width:599px){
     .about-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:.6rem}
     .stat{min-width:0;padding:.8rem .3rem}.stat-icon{font-size:1.3rem}.stat-label{font-size:.58rem;letter-spacing:.03em}
-    .arrow{width:42px;height:42px}.dots{gap:.3rem}.dot{width:34px}
     .mission-card{padding:1.1rem}
   }
   @media(max-width:380px){.hide-xs{display:none}}
-  @media(min-width:1600px){.wrap{max-width:1600px}.ccard{width:440px}h1{font-size:8.5rem}.about-desc{font-size:1.1rem}}
+  @media(min-width:1600px){.wrap{max-width:1600px}h1{font-size:8.5rem}.about-desc{font-size:1.1rem}}
   @media(max-height:520px) and (orientation:landscape){.hero{min-height:auto;padding-block:3rem 1.5rem}.hero-bg{display:none}}
-  @media(prefers-reduced-motion:reduce){.totop,.stat{transition:none}:global(html){scroll-behavior:auto}h1 span{animation:none}.band-t{animation:none}.btn,.ccard,.cbody,.cart,.cdesc,.ccta,.cpin,.cemoji,.stat{transition:none}.particle,.orb{animation:none}.scroll-h{display:none}.ccard{animation:none!important}}
+  @media(prefers-reduced-motion:reduce){.totop,.stat{transition:none}:global(html){scroll-behavior:auto}h1 span{animation:none}.band-t{animation:none}.btn,.stat{transition:none}.particle,.orb{animation:none}.scroll-h{display:none}}
 
   /* ===== BADGE HARGA ===== */
   .badge{position:absolute;top:.75rem;right:.75rem;z-index:2;display:inline-flex;align-items:center;gap:.3rem;padding:.25rem .65rem;border-radius:99px;font-size:.64rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;background:var(--cream);color:var(--maroon);box-shadow:0 2px 8px rgba(0,0,0,.15)}
